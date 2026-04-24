@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>고몽스캐너 — Design Canvas</title>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<style>
+  html, body { margin: 0; padding: 0; height: 100%;
+    font-family: "Pretendard Variable", Pretendard, system-ui, sans-serif; }
+  body { overflow: hidden; }
+
+  .device {
+    width: 100%; height: 100%;
+    border-radius: 40px;
+    overflow: hidden;
+    position: relative;
+    background: #07070A;
+    box-shadow: inset 0 0 0 1.5px rgba(255,255,255,0.06);
+  }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="src/tokens.jsx"></script>
+<script type="text/babel" src="src/data/mock.jsx"></script>
+<script type="text/babel" src="src/components/index.jsx"></script>
+<script type="text/babel" src="src/screens/Home.jsx"></script>
+<script type="text/babel" src="src/screens/Scanning.jsx"></script>
+<script type="text/babel" src="src/screens/Result.jsx"></script>
+<script type="text/babel" src="src/screens/Search.jsx"></script>
+<script type="text/babel" src="src/screens/Collection.jsx"></script>
+<script type="text/babel" src="src/App.jsx"></script>
+
+<script type="text/babel">
+  const styleEl = document.createElement("style");
+  styleEl.textContent = window.TOKENS_CSS;
+  document.head.appendChild(styleEl);
+
+  // 모바일 프레임 래퍼 — 각 아트보드 안에 스크린 하나씩
+  function Frame({ children }) {
+    return (
+      <div className="device gm-frame" style={{ width: 390, height: 844 }}>
+        {children}
+      </div>
+    );
+  }
+
+  // 탭바 없이 화면 하나만 보여주는 래퍼 (탭바가 컨텐츠 가리는 것 방지용으로 screens 내부 TabBar 제거된 상태로 렌더)
+  function FrameWithApp({ initial }) {
+    return (
+      <Frame><App initialScreen={initial} /></Frame>
+    );
+  }
+
+  // ── 정적 상태 전용 래퍼들 (특정 화면만 표시, 탭바 포함) ─────
+  function StaticHome() {
+    return <Frame>
+      <div className="gm-frame" style={{ position: "absolute", inset: 0 }}>
+        <Home onCapture={()=>{}} onOpenSearch={()=>{}} onOpenUpload={()=>{}} />
+        <TabBar active="scan" onChange={()=>{}} />
+      </div>
+    </Frame>;
+  }
+  function StaticScanning() {
+    return <Frame>
+      <div className="gm-frame" style={{ position: "absolute", inset: 0 }}>
+        <Scanning onDone={()=>{}} />
+      </div>
+    </Frame>;
+  }
+  function StaticResult() {
+    const [saved, setSaved] = React.useState(false);
+    return <Frame>
+      <div className="gm-frame" style={{ position: "absolute", inset: 0 }}>
+        <Result saved={saved} onSave={()=>setSaved(s=>!s)} onBack={()=>{}} />
+      </div>
+    </Frame>;
+  }
+  function StaticSearch() {
+    return <Frame>
+      <div className="gm-frame" style={{ position: "absolute", inset: 0 }}>
+        <Search onBack={()=>{}} onSubmit={()=>{}} />
+        <TabBar active="search" onChange={()=>{}} />
+      </div>
+    </Frame>;
+  }
+  function StaticCollection() {
+    return <Frame>
+      <div className="gm-frame" style={{ position: "absolute", inset: 0 }}>
+        <Collection onOpenCard={()=>{}} onBack={()=>{}} />
+        <TabBar active="collection" onChange={()=>{}} />
+      </div>
+    </Frame>;
+  }
+
+  // ── 디자인 시스템 스펙 시트 ────────────────────────────────
+  function DesignSystemBoard() {
+    return (
+      <div className="gm-frame" style={{
+        width: 540, height: 844, padding: 32,
+        background: "var(--gm-bg0)", color: "var(--gm-fg0)",
+        overflowY: "auto",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
+          <LogoMark/>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em" }}>
+              고몽<span style={{ color: "var(--gm-yellow)" }}>스캐너</span>
+            </div>
+            <div style={{ fontFamily: "var(--gm-font-mono)", fontSize: 10, color: "var(--gm-fg2)", letterSpacing: "0.05em" }}>
+              DESIGN SYSTEM · v0.1
+            </div>
+          </div>
+        </div>
+
+        {/* 컬러 */}
+        <SpecSection title="Color · 컬러">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+            {[
+              ["bg0", "#07070A"],["bg1","#0E0E14"],["bg2","#17171F"],
+              ["bg3","#24242E"],["fg0","#F5F5F7"],["fg2","#86868F"],
+            ].map(([n,h]) => (
+              <div key={n} style={{ borderRadius: 10, overflow: "hidden", boxShadow: "inset 0 0 0 1px var(--gm-bg3)" }}>
+                <div style={{ height: 44, background: h }}/>
+                <div style={{ padding: "6px 8px" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700 }}>{n}</div>
+                  <div style={{ fontFamily: "var(--gm-font-mono)", fontSize: 9, color: "var(--gm-fg2)" }}>{h}</div>
+                </div>
+              </div>
+            ))}
+            <div style={{ borderRadius: 10, overflow: "hidden", boxShadow: "inset 0 0 0 1px var(--gm-bg3)" }}>
+              <div style={{ height: 44, background: "var(--gm-yellow)" }}/>
+              <div style={{ padding: "6px 8px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700 }}>yellow</div>
+                <div style={{ fontFamily: "var(--gm-font-mono)", fontSize: 9, color: "var(--gm-fg2)" }}>#FFCB05</div>
+              </div>
+            </div>
+            <div style={{ borderRadius: 10, overflow: "hidden", boxShadow: "inset 0 0 0 1px var(--gm-bg3)", gridColumn: "span 2" }}>
+              <div style={{ height: 44, background: "var(--gm-holo-grad)" }}/>
+              <div style={{ padding: "6px 8px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700 }}>holo gradient</div>
+                <div style={{ fontFamily: "var(--gm-font-mono)", fontSize: 9, color: "var(--gm-fg2)" }}>violet → pink → blue</div>
+              </div>
+            </div>
+          </div>
+        </SpecSection>
+
+        {/* 타이포 */}
+        <SpecSection title="Type · 타이포">
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.03em" }}>Pretendard · 800 / -3%</div>
+            <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em" }}>Pretendard · 700 / -2%</div>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>Pretendard · 600 / body</div>
+            <div style={{ fontFamily: "var(--gm-font-mono)", fontSize: 20, fontWeight: 700, color: "var(--gm-yellow)" }}>₩385,000</div>
+            <div style={{ fontFamily: "var(--gm-font-mono)", fontSize: 11, color: "var(--gm-fg2)", letterSpacing: "0.05em" }}>
+              JetBrains Mono · 가격 / 번호 / 메타
+            </div>
+          </div>
+        </SpecSection>
+
+        {/* 컴포넌트 */}
+        <SpecSection title="Components · 컴포넌트">
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+            <Button variant="primary">Primary</Button>
+            <Button variant="holo">Holo CTA</Button>
+            <Button variant="ghost">Ghost</Button>
+            <Button variant="outline">Outline</Button>
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+            <Chip tone="holo">SAR</Chip>
+            <Chip tone="yellow" leftDot>거래 확인</Chip>
+            <Chip tone="neutral">JP</Chip>
+            <Chip tone="psa">PSA 10</Chip>
+            <Chip tone="up"><IconTrend size={10} up/> +4.2%</Chip>
+            <Chip tone="down"><IconTrend size={10} up={false}/> -2.1%</Chip>
+          </div>
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+            <HoloCard width={110} hue={18} number="201/165" label="SAMPLE" />
+            <div style={{ flex: 1 }}>
+              <PriceBar min={312000} mid={385000} max={468000} />
+            </div>
+          </div>
+        </SpecSection>
+      </div>
+    );
+  }
+  function SpecSection({ title, children }) {
+    return (
+      <div style={{ marginBottom: 24 }}>
+        <div style={{
+          fontSize: 10, fontWeight: 700, color: "var(--gm-fg3)",
+          letterSpacing: "0.15em", marginBottom: 10, textTransform: "uppercase",
+        }}>{title}</div>
+        {children}
+      </div>
+    );
+  }
+
+  // ── 캔버스 조립 ──────────────────────────────────────────
+  function CanvasRoot() {
+    return (
+      <DesignCanvas title="고몽스캐너 · GoMong Scanner"
+                    subtitle="포켓몬 카드 시세 스캐너 · 하이파이 프로토타입 · 다크 / 홀로그래픽">
+
+        <DCSection id="flow" title="User Flow" subtitle="스캔 → AI 분석 → 결과 (풀 플로우 인터랙티브)">
+          <DCArtboard id="home"       label="01 · Home (카메라 스캐너)"  width={390} height={844}>
+            <StaticHome/>
+          </DCArtboard>
+          <DCArtboard id="scanning"   label="02 · AI Scanning"            width={390} height={844}>
+            <StaticScanning/>
+          </DCArtboard>
+          <DCArtboard id="result"     label="03 · Result (시세)"          width={390} height={844}>
+            <StaticResult/>
+          </DCArtboard>
+          <DCArtboard id="fullflow"   label="🎬 Full Flow (클릭해서 체험)"   width={390} height={844}>
+            <FrameWithApp initial="home"/>
+          </DCArtboard>
+        </DCSection>
+
+        <DCSection id="secondary" title="Secondary Screens" subtitle="텍스트 검색 · 보관함">
+          <DCArtboard id="search"     label="04 · Text Search"             width={390} height={844}>
+            <StaticSearch/>
+          </DCArtboard>
+          <DCArtboard id="collection" label="05 · Collection (보관함)"    width={390} height={844}>
+            <StaticCollection/>
+          </DCArtboard>
+        </DCSection>
+
+        <DCSection id="system" title="Design System" subtitle="토큰 · 타이포 · 컴포넌트">
+          <DCArtboard id="ds" label="Design System Sheet" width={540} height={844}>
+            <DesignSystemBoard/>
+          </DCArtboard>
+        </DCSection>
+
+      </DesignCanvas>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<CanvasRoot/>);
+</script>
+
+</body>
+</html>

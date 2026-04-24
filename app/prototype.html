@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>고몽스캐너 — 프로토타입</title>
+
+<!-- Pretendard -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
+<!-- JetBrains Mono -->
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- React + Babel -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #000;
+    font-family: "Pretendard Variable", Pretendard, system-ui, sans-serif;
+    color: #F5F5F7;
+    overflow: hidden;
+  }
+
+  /* 풀뷰: 단일 디바이스 뷰포트 */
+  .stage {
+    position: fixed; inset: 0;
+    display: grid; place-items: center;
+    background:
+      radial-gradient(ellipse at 20% 10%, oklch(20% 0.1 280 / 0.4), transparent 50%),
+      radial-gradient(ellipse at 80% 90%, oklch(20% 0.12 30 / 0.4), transparent 50%),
+      #050508;
+  }
+
+  /* 디바이스 프레임 없이 풀모바일 — 뷰포트에 맞춰 스케일 */
+  .device {
+    width: 390px;
+    height: 844px;
+    border-radius: 48px;
+    overflow: hidden;
+    position: relative;
+    background: #07070A;
+    box-shadow:
+      0 0 0 2px rgba(255,255,255,0.05),
+      0 40px 100px -20px rgba(0,0,0,0.8),
+      0 0 120px -10px rgba(167,139,250,0.15);
+  }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div class="device" id="device"></div>
+</div>
+
+<!-- Design tokens → writes TOKENS_CSS into a <style> -->
+<script type="text/babel" src="src/tokens.jsx"></script>
+<!-- Mock data -->
+<script type="text/babel" src="src/data/mock.jsx"></script>
+<!-- Components -->
+<script type="text/babel" src="src/components/index.jsx"></script>
+<!-- Screens -->
+<script type="text/babel" src="src/screens/Home.jsx"></script>
+<script type="text/babel" src="src/screens/Scanning.jsx"></script>
+<script type="text/babel" src="src/screens/Result.jsx"></script>
+<script type="text/babel" src="src/screens/Search.jsx"></script>
+<script type="text/babel" src="src/screens/Collection.jsx"></script>
+<!-- App 플로우 -->
+<script type="text/babel" src="src/App.jsx"></script>
+
+<script type="text/babel">
+  // 토큰 CSS 주입
+  const styleEl = document.createElement("style");
+  styleEl.textContent = window.TOKENS_CSS;
+  document.head.appendChild(styleEl);
+
+  // 리사이즈 시 디바이스 스케일링
+  function scaleDevice() {
+    const device = document.getElementById("device");
+    if (!device) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const padding = 32;
+    const scale = Math.min(
+      (vw - padding) / 390,
+      (vh - padding) / 844,
+      1
+    );
+    device.style.transform = `scale(${scale})`;
+    device.style.transformOrigin = "center center";
+  }
+  window.addEventListener("resize", scaleDevice);
+  scaleDevice();
+
+  const root = ReactDOM.createRoot(document.getElementById("device"));
+  root.render(<App initialScreen="home" />);
+</script>
+
+</body>
+</html>
