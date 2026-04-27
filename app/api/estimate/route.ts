@@ -195,11 +195,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(mockEstimate(body));
     }
 
-    const identity = await withTimeout(
+    const identifiedIdentity = await withTimeout(
       identifyCard(body),
       30000,
       "Gemini identification timed out"
     ).catch(() => fallbackIdentity(body));
+    const identity = applyStructuredInputConstraints(identifiedIdentity, body);
     const marketContext = await collectMarketContext(identity);
     const estimate = await withTimeout(
       summarizePrice(identity, marketContext, body.intent || "own"),
@@ -2936,6 +2937,57 @@ function fallbackIdentity(input: EstimateRequest): CardIdentity {
       ],
       targetCondition
     )
+  });
+}
+
+function applyStructuredInputConstraints(identity: CardIdentity, input: EstimateRequest): CardIdentity {
+  const languageMap = {
+    japanese: "Japanese",
+    english: "English",
+    korean: "Korean"
+  } as const;
+
+  const pokemonName = cleanString(input.pokemonName);
+  const pokemonEntry = pokemonEntryForName(pokemonName || "");
+  const forcedName = pokemonEntry?.entry.en || pokemonName || identity.name;
+  const forcedNumber = normalizeCardNumber(cleanString(input.cardNumber) || identity.number);
+  const forcedLanguage = cleanString(input.language ? languageMap[input.language] : "") || identity.language;
+  const forcedGrade =
+    input.cardType === "psa" ? cleanString(input.grade) || identity.grade || "10" : identity.grade;
+  const forcedGradingCompany = input.cardType === "psa" ? "PSA" : identity.gradingCompany;
+  const forcedTargetCondition =
+    input.cardType === "psa"
+      ? forcedGrade === "9"
+        ? "psa9"
+        : "psa10"
+      : identity.targetCondition;
+
+  const forcedSearchQueries = uniqueNonEmpty([
+    ...identity.searchQueries,
+    ...expandPokemonNameAliases(pokemonName),
+    ...expandPokemonNameAliases(cleanString(input.query)),
+    joinSearchParts([forcedName, forcedNumber, forcedLanguage, conditionSearchTerm(forcedTargetCondition)]),
+    joinSearchParts([forcedName, forcedNumber, conditionSearchTerm(forcedTargetCondition)]),
+    joinSearchParts([forcedNumber, forcedLanguage, conditionSearchTerm(forcedTargetCondition)]),
+    joinSearchParts([forcedName, forcedLanguage]),
+    joinSearchParts([forcedName, forcedNumber])
+  ]).slice(0, 18);
+
+  const forcedWarnings = (identity.validationWarnings || []).filter(
+    (warning) => warning !== "language-unknown" && warning !== "number-unknown"
+  );
+
+  return applyKnownCardCorrections({
+    ...identity,
+    name: forcedName,
+    number: forcedNumber,
+    language: forcedLanguage,
+    grade: forcedGrade,
+    gradingCompany: forcedGradingCompany,
+    targetCondition: forcedTargetCondition,
+    confidence: Math.max(identity.confidence, pokemonName || input.cardNumber || input.language ? 92 : identity.confidence),
+    searchQueries: forcedSearchQueries,
+    validationWarnings: forcedWarnings
   });
 }
 
