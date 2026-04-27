@@ -1000,10 +1000,13 @@ async function collectKream(
 }
 
 async function collectKreamQuick(identity: CardIdentity, searchPlan: MarketSearchPlan): Promise<PriceCandidate[]> {
-  const query = searchPlan.marketQueries.kream[0];
-  if (!query) return [];
-  const primaryFastPath = await collectKreamPrimaryDetailCandidates(query, identity).catch(() => []);
-  return filterStructuredCandidates(primaryFastPath, identity).slice(0, 12);
+  const queries = uniqueNonEmpty(searchPlan.marketQueries.kream).slice(0, 2);
+  for (const query of queries) {
+    const primaryFastPath = await collectKreamPrimaryDetailCandidates(query, identity).catch(() => []);
+    const filtered = filterStructuredCandidates(primaryFastPath, identity).slice(0, 12);
+    if (filtered.length > 0) return filtered;
+  }
+  return [];
 }
 
 async function collectKreamPrimaryDetailCandidates(query: string, identity: CardIdentity) {
@@ -1702,12 +1705,16 @@ function dedupePriceCandidates(candidates: PriceCandidate[]) {
 async function fetchHtml(url: string) {
   const headers: Record<string, string> = {
     "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1",
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7,ja;q=0.6",
     "Cache-Control": "no-cache",
     Pragma: "no-cache",
-    "Upgrade-Insecure-Requests": "1"
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1"
   };
 
   if (url.includes("kream.co.kr")) {
