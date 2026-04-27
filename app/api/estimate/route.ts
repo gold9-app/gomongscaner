@@ -254,11 +254,11 @@ async function identifyCard(input: EstimateRequest): Promise<CardIdentity> {
     "When an input name is Korean, do not leave name only in Korean. Include English search queries that work on eBay and PriceCharting.",
     "Return this JSON shape:",
     JSON.stringify({
-      name: "Psyduck",
+      name: "Pokemon Name",
       language: "Japanese",
-      setName: "Mega Dream ex",
-      number: "199/193",
-      rarity: "AR",
+      setName: "Set Name",
+      number: "123/100",
+      rarity: "SAR",
       productLine: "tcg",
       year: "",
       gradingCompany: "PSA",
@@ -267,11 +267,11 @@ async function identifyCard(input: EstimateRequest): Promise<CardIdentity> {
       imageType: "raw-card | graded-slab | marketplace-screenshot | app-screenshot | unknown",
       evidencePriority: "label",
       labelBasedIdentity: {
-        name: "Psyduck",
+        name: "Pokemon Name",
         language: "Japanese",
-        setName: "Mega Dream ex",
-        number: "199/193",
-        rarity: "AR",
+        setName: "Set Name",
+        number: "123/100",
+        rarity: "SAR",
         productLine: "tcg",
         year: "",
         gradingCompany: "PSA",
@@ -279,19 +279,19 @@ async function identifyCard(input: EstimateRequest): Promise<CardIdentity> {
         certNumber: "",
         confidence: 90,
         evidence: "PSA label text if present",
-        searchQueries: ["Psyduck 199/193 PSA 10"]
+        searchQueries: ["Pokemon Name 123/100 PSA 10"]
       },
       imageBasedIdentity: {
-        name: "Psyduck",
+        name: "Pokemon Name",
         language: "Japanese",
-        setName: "Mega Dream ex",
-        number: "199/193",
-        rarity: "AR",
+        setName: "Set Name",
+        number: "123/100",
+        rarity: "SAR",
         productLine: "tcg",
         year: "",
         confidence: 82,
         evidence: "visible card artwork/layout/text",
-        searchQueries: ["Psyduck 199/193", "고라파덕 199/193"]
+        searchQueries: ["Pokemon Name 123/100", "Localized Name 123/100"]
       },
       targetCondition: "psa10",
       confidence: 90,
@@ -299,21 +299,21 @@ async function identifyCard(input: EstimateRequest): Promise<CardIdentity> {
       validationWarnings: ["string"],
       candidates: [
         {
-          name: "Psyduck",
+          name: "Pokemon Name",
           language: "Japanese",
-          setName: "Mega Dream ex",
-          number: "199/193",
-          rarity: "AR",
+          setName: "Set Name",
+          number: "123/100",
+          rarity: "SAR",
           productLine: "tcg",
           year: "",
           gradingCompany: "PSA",
           grade: "10",
           certNumber: "",
           confidence: 90,
-          evidence: "number 199/193 and Psyduck artwork visible"
+          evidence: "number, set, and artwork match"
         }
       ],
-      searchQueries: ["Psyduck 199/193", "고라파덕 199/193", "M2A 199/193", "Psyduck 199/193 PSA 10"]
+      searchQueries: ["Pokemon Name 123/100", "Localized Name 123/100", "SET1 123/100", "Pokemon Name 123/100 PSA 10"]
     })
   ].join(" ");
 
@@ -442,9 +442,9 @@ async function searchMarketPrices(identity: CardIdentity, searchPlan: MarketSear
     "",
     "MARKET QUERY STRATEGY:",
     "- Do not use one long query for every market.",
-    "- For SNKRDUNK/KREAM, prefer short number-focused queries such as 'Psyduck 199/193' or localized name + number.",
+    "- For SNKRDUNK/KREAM, prefer short number-focused queries such as '<localized name> <number>' or '<english name> <number>'.",
     "- Use condition terms like PSA 10 mostly after broad results are found, not as the only search query.",
-    "- For graded standard TCG cards with a known number, start from exact set-aware queries such as 'Psyduck AR 199/193 M2A PSA 10' or 'Psyduck AR 199/193 Mega Dream ex PSA 10' before broader number-only queries.",
+    "- For graded standard TCG cards with a known number, start from exact set-aware queries such as '<english name> <rarity> <number> <set code> PSA 10' or '<english name> <rarity> <number> <set name> PSA 10' before broader number-only queries.",
     "- For each candidate, include marketSearchQuery and matchScore from 0-100.",
     "- Set numberMatch and conditionMatch booleans.",
     "",
@@ -464,7 +464,7 @@ async function searchMarketPrices(identity: CardIdentity, searchPlan: MarketSear
           language: "Japanese",
           exactMatch: true,
           excludeReason: "",
-          marketSearchQuery: "Psyduck 199/193",
+          marketSearchQuery: "Pokemon Name 123/100",
           matchScore: 95,
           numberMatch: true,
           conditionMatch: true
@@ -2505,38 +2505,6 @@ function guessMarket(url: string) {
 }
 
 function applyKnownCardCorrections(identity: CardIdentity): CardIdentity {
-  const haystack = `${identity.name} ${identity.setName} ${identity.extractedText || ""} ${identity.imageBasedIdentity?.evidence || ""}`.toLowerCase();
-  if (
-    (haystack.includes("고라파덕") || haystack.includes("psyduck")) &&
-    (haystack.includes("메가드림") || haystack.includes("mega dream"))
-  ) {
-    const name = "Psyduck AR";
-    const number = identity.number === "Unknown" ? "199/193" : identity.number;
-    const setName = "Mega Dream ex";
-    return {
-      ...identity,
-      name,
-      language: "Japanese",
-      setName,
-      number,
-      rarity: identity.rarity === "Unknown rarity" ? "AR" : identity.rarity,
-      searchQueries: ensureConditionQueries(
-        [
-          `${name} ${number} Mega Dream ex`,
-          `Psyduck AR M2A ${number}`,
-          `고라파덕 AR 메가드림 ex ${number}`,
-          `Psyduck 199/193 PSA 10`,
-          `M2A199/193 Psyduck AR PSA 10`,
-          `Psyduck 199 Japanese Mega Dream ex PriceCharting`,
-          `Psyduck 199/193 Sports Card Investor PSA 10`,
-          `Psyduck m2a 199 Scrydex PSA 10`,
-          `Psyduck 199/193 eBay sold PSA 10`
-        ],
-        identity.targetCondition
-      )
-    };
-  }
-
   return applyGenericImageEvidenceCorrections(identity);
 }
 
