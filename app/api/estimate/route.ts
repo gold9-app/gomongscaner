@@ -406,8 +406,8 @@ async function collectMarketContext(identity: CardIdentity) {
   const searchPlan = buildMarketSearchPlan(identity);
   if (shouldPrioritizeKoreanMarkets(identity)) {
     const [snkrdunk, kream] = await Promise.all([
-      withTimeout(collectSnkrdunk(identity, searchPlan), 25000, "SNKRDUNK collector timed out").catch(() => []),
-      withTimeout(collectKream(identity, searchPlan), 25000, "KREAM collector timed out").catch(() => [])
+      withTimeout(collectSnkrdunkQuick(identity, searchPlan), 12000, "SNKRDUNK quick collector timed out").catch(() => []),
+      withTimeout(collectKreamQuick(identity, searchPlan), 12000, "KREAM quick collector timed out").catch(() => [])
     ]);
 
     const direct = mergeStructuredCandidates(snkrdunk, kream);
@@ -880,6 +880,13 @@ async function collectSnkrdunk(
   return filterStructuredCandidates([...apiCandidates, ...listCandidates, ...detailCandidates], identity).slice(0, 24);
 }
 
+async function collectSnkrdunkQuick(identity: CardIdentity, searchPlan: MarketSearchPlan): Promise<PriceCandidate[]> {
+  const query = searchPlan.marketQueries.snkrdunk[0];
+  if (!query) return [];
+  const apiCandidates = await collectSnkrdunkSearchApi(identity, query).catch(() => []);
+  return filterStructuredCandidates(apiCandidates, identity).slice(0, 12);
+}
+
 async function collectSnkrdunkSearchApi(identity: CardIdentity, query: string): Promise<PriceCandidate[]> {
   const url = new URL("https://snkrdunk.com/en/v1/search");
   url.searchParams.set("keyword", query);
@@ -990,6 +997,13 @@ async function collectKream(
   }
 
   return filterStructuredCandidates(dedupePriceCandidates(collected), identity).slice(0, 24);
+}
+
+async function collectKreamQuick(identity: CardIdentity, searchPlan: MarketSearchPlan): Promise<PriceCandidate[]> {
+  const query = searchPlan.marketQueries.kream[0];
+  if (!query) return [];
+  const primaryFastPath = await collectKreamPrimaryDetailCandidates(query, identity).catch(() => []);
+  return filterStructuredCandidates(primaryFastPath, identity).slice(0, 12);
 }
 
 async function collectKreamPrimaryDetailCandidates(query: string, identity: CardIdentity) {
