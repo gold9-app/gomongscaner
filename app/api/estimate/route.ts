@@ -851,6 +851,10 @@ function extractMarketDetailCandidates(
   identity: CardIdentity,
   defaultCurrency: "KRW" | "JPY"
 ) {
+  const embeddedCandidates =
+    market === "KREAM"
+      ? extractKreamNuxtCandidates(html, detailUrl, identity)
+      : [];
   const normalizedHtml = decodeHtml(html);
   const text = decodeHtml(stripTags(html)).replace(/\s+/g, " ").trim();
   const windows = buildDetailWindows(normalizedHtml, text, identity, market);
@@ -863,9 +867,151 @@ function extractMarketDetailCandidates(
     );
   }
 
-  return dedupePriceCandidates(candidates)
+  return dedupePriceCandidates([...embeddedCandidates, ...candidates])
     .filter((candidate) => candidateSupportsIdentity(candidate, identity))
     .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
+}
+
+function extractKreamNuxtCandidates(html: string, detailUrl: string, identity: CardIdentity) {
+  const payload = extractNuxtDataPayload(html);
+  if (!payload) return [];
+
+  const summaryIndex = payload.indexOf("transaction_history_summary");
+  if (summaryIndex < 0) return [];
+
+  const chunk = payload.slice(summaryIndex, Math.min(payload.length, summaryIndex + 12000));
+  const salesSection = betweenMarkers(chunk, "\"체결 거래\"", "\"판매 입찰\"");
+  const asksSection = betweenMarkers(chunk, "\"판매 입찰\"", "\"구매 입찰\"");
+  const bidsSection = betweenMarkers(chunk, "\"구매 입찰\"", "\"로그인\"");
+  const candidates = [
+    ...parseKreamSalesSection(salesSection, detailUrl, identity),
+    ...parseKreamOrderSection(asksSection, detailUrl, identity, "ask"),
+    ...parseKreamOrderSection(bidsSection, detailUrl, identity, "bid")
+  ];
+
+  return dedupePriceCandidates(candidates);
+}
+
+function extractNuxtDataPayload(html: string) {
+  return html.match(
+    /<script type="application\/json" data-nuxt-data="nuxt-app"[^>]*>([\s\S]*?)<\/script>/i
+  )?.[1];
+}
+
+function betweenMarkers(source: string, startMarker: string, endMarker: string) {
+  const start = source.indexOf(startMarker);
+  if (start < 0) return "";
+  const rest = source.slice(start);
+  const end = rest.indexOf(endMarker, startMarker.length);
+  return end >= 0 ? rest.slice(0, end) : rest;
+}
+
+function parseKreamSalesSection(section: string, detailUrl: string, identity: CardIdentity) {
+  if (!section) return [];
+
+  const candidates: PriceCandidate[] = [];
+  const targetTerms = detailConditionTerms(identity.targetCondition).map((term) => term.toLowerCase());
+  let currentOption = "";
+  const explicitPattern =
+    /\{"product_id":\d+,"product_option":\d+,"price":\d+,"is_immediate_delivery_item":[^}]+\},\{"product_id":\d+,"key":\d+,"name":\d+,"name_display":\d+,"id":\d+\},"([^"]+)",\d+,(\d{5,7}),"(20\d{2}-\d{2}-\d{2}T[^"]+)","([^"]+)"/g;
+  const implicitPattern =
+    /\{"product_id":\d+,"product_option":\d+,"price":\d+,"is_immediate_delivery_item":[^}]+\},\{"product_id":\d+,"key":\d+,"name":\d+,"name_display":\d+,"id":\d+\},(\d{5,7}),"(20\d{2}-\d{2}-\d{2}T[^"]+)","([^"]+)"/g;
+
+  for (const match of section.matchAll(explicitPattern)) {
+    currentOption = cleanString(match[1]);
+    if (!matchesTargetOption(currentOption, targetTerms)) continue;
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market: "KREAM",
+        detailUrl,
+        defaultCurrency: "KRW",
+        price: Number(match[2]),
+        saleType: "sold",
+        title: `${identity.name} ${identity.number} ${currentOption} 체결 거래 ${match[4]}`,
+        matchScore: 100
+      })
+    );
+  }
+
+  for (const match of section.matchAll(implicitPattern)) {
+    if (!matchesTargetOption(currentOption, targetTerms)) continue;
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market: "KREAM",
+        detailUrl,
+        defaultCurrency: "KRW",
+        price: Number(match[1]),
+        saleType: "sold",
+        title: `${identity.name} ${identity.number} ${currentOption || conditionSearchTerm(identity.targetCondition)} 체결 거래 ${match[3]}`,
+        matchScore: 99
+      })
+    );
+  }
+
+  return candidates;
+}
+
+function parseKreamOrderSection(
+  section: string,
+  detailUrl: string,
+  identity: CardIdentity,
+  orderType: "ask" | "bid"
+) {
+  if (!section) return [];
+
+  const candidates: PriceCandidate[] = [];
+  const targetTerms = detailConditionTerms(identity.targetCondition).map((term) => term.toLowerCase());
+  let currentOption = "";
+  const explicitPattern =
+    /\{"product_id":\d+,"product_option":\d+,"price":\d+,"quantity":\d+,"is_immediate_delivery_item":[^}]+\},\{"product_id":\d+,"key":\d+,"name":\d+,"name_display":\d+,"id":\d+\},"([^"]+)",\d+,(\d{5,7})(?=,|})/g;
+  const implicitPattern =
+    /\{"product_id":\d+,"product_option":\d+,"price":\d+,"quantity":\d+,"is_immediate_delivery_item":[^}]+\},\{"product_id":\d+,"key":\d+,"name":\d+,"name_display":\d+,"id":\d+\},(\d{5,7})(?=,|})/g;
+
+  for (const match of section.matchAll(explicitPattern)) {
+    currentOption = cleanString(match[1]);
+    if (!matchesTargetOption(currentOption, targetTerms)) continue;
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market: "KREAM",
+        detailUrl,
+        defaultCurrency: "KRW",
+        price: Number(match[2]),
+        saleType: "listing",
+        title: `${identity.name} ${identity.number} ${currentOption} ${
+          orderType === "ask" ? "즉시 구매가" : "즉시 판매가"
+        }`,
+        matchScore: 99
+      })
+    );
+  }
+
+  for (const match of section.matchAll(implicitPattern)) {
+    if (!matchesTargetOption(currentOption, targetTerms)) continue;
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market: "KREAM",
+        detailUrl,
+        defaultCurrency: "KRW",
+        price: Number(match[1]),
+        saleType: "listing",
+        title: `${identity.name} ${identity.number} ${currentOption || conditionSearchTerm(identity.targetCondition)} ${
+          orderType === "ask" ? "즉시 구매가" : "즉시 판매가"
+        }`,
+        matchScore: 98
+      })
+    );
+  }
+
+  return candidates;
+}
+
+function matchesTargetOption(optionLabel: string, targetTerms: string[]) {
+  const normalized = optionLabel.toLowerCase();
+  return targetTerms.some((term) => normalized.includes(term.toLowerCase()));
 }
 
 function buildDetailWindows(
