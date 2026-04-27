@@ -177,6 +177,7 @@ const FX_JPY_KRW = Number(process.env.FX_JPY_KRW) || 9.5;
 const FX_EUR_KRW = Number(process.env.FX_EUR_KRW) || 1550;
 const FX_GBP_KRW = Number(process.env.FX_GBP_KRW) || 1800;
 const FX_HKD_KRW = Number(process.env.FX_HKD_KRW) || 178;
+const HTML_FETCH_TIMEOUT_MS = 10000;
 const POKEMON_NAME_ENTRIES = pokemonMultilang as PokemonNameEntry[];
 const POKEMON_NAME_INDEX = buildPokemonNameIndex(POKEMON_NAME_ENTRIES);
 
@@ -394,17 +395,17 @@ async function generateGeminiContent(parts: Array<Record<string, unknown>>) {
 async function collectMarketContext(identity: CardIdentity) {
   const searchPlan = buildMarketSearchPlan(identity);
   const [perplexity, ebayBrowse, ebaySold, ebayCurrent, priceCharting, snkrdunk, kream] = await Promise.all([
-    withTimeout(searchMarketPrices(identity, searchPlan), 45000, "Perplexity search timed out").catch((error) => ({
+    withTimeout(searchMarketPrices(identity, searchPlan), 25000, "Perplexity search timed out").catch((error) => ({
       error: error instanceof Error ? error.message : "Perplexity search failed"
     })),
     searchEbayBrowse(identity, searchPlan),
-    withTimeout(collectEbayHtml(identity, searchPlan, "sold"), 45000, "eBay sold collector timed out").catch(() => []),
-    withTimeout(collectEbayHtml(identity, searchPlan, "current"), 45000, "eBay current collector timed out").catch(
+    withTimeout(collectEbayHtml(identity, searchPlan, "sold"), 20000, "eBay sold collector timed out").catch(() => []),
+    withTimeout(collectEbayHtml(identity, searchPlan, "current"), 20000, "eBay current collector timed out").catch(
       () => []
     ),
-    withTimeout(collectPriceCharting(identity, searchPlan), 45000, "PriceCharting collector timed out").catch(() => []),
-    withTimeout(collectSnkrdunk(identity, searchPlan), 45000, "SNKRDUNK collector timed out").catch(() => []),
-    withTimeout(collectKream(identity, searchPlan), 45000, "KREAM collector timed out").catch(() => [])
+    withTimeout(collectPriceCharting(identity, searchPlan), 20000, "PriceCharting collector timed out").catch(() => []),
+    withTimeout(collectSnkrdunk(identity, searchPlan), 20000, "SNKRDUNK collector timed out").catch(() => []),
+    withTimeout(collectKream(identity, searchPlan), 20000, "KREAM collector timed out").catch(() => [])
   ]);
 
   const direct = mergeStructuredCandidates(ebaySold, ebayCurrent, priceCharting, snkrdunk, kream);
@@ -880,7 +881,7 @@ async function collectKream(
   identity: CardIdentity,
   searchPlan: MarketSearchPlan
 ): Promise<PriceCandidate[]> {
-  const queries = uniqueNonEmpty(searchPlan.marketQueries.kream).slice(0, 4);
+  const queries = uniqueNonEmpty(searchPlan.marketQueries.kream).slice(0, 2);
   const collected: PriceCandidate[] = [];
 
   for (const query of queries) {
@@ -916,7 +917,7 @@ async function collectKream(
 }
 
 async function collectKreamSearchDetailCandidates(html: string, identity: CardIdentity) {
-  const detailUrls = extractKreamSearchDetailUrls(html).slice(0, 6);
+  const detailUrls = extractKreamSearchDetailUrls(html).slice(0, 3);
   if (detailUrls.length === 0) return [];
 
   const pages = await Promise.all(
@@ -1438,7 +1439,8 @@ async function fetchHtml(url: string) {
 
   const response = await fetch(url, {
     headers,
-    cache: "no-store"
+    cache: "no-store",
+    signal: AbortSignal.timeout(HTML_FETCH_TIMEOUT_MS)
   });
 
   if (!response.ok) {
