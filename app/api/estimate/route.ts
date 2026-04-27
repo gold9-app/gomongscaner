@@ -876,23 +876,32 @@ async function collectKream(
   identity: CardIdentity,
   searchPlan: MarketSearchPlan
 ): Promise<PriceCandidate[]> {
-  const query = searchPlan.marketQueries.kream[0] || buildSourceQuery(identity);
-  const url = `https://kream.co.kr/search?keyword=${encodeURIComponent(query)}`;
-  const html = await fetchHtml(url);
-  const listCandidates = extractHtmlCards(html, "kream.co.kr", query, identity, "listing").map((candidate) => ({
-    ...candidate,
-    market: "KREAM",
-    currency: candidate.currency || "KRW",
-    approximateKrw: convertToKrw(candidate.price, candidate.currency || "KRW")
-  }));
+  const queries = uniqueNonEmpty(searchPlan.marketQueries.kream).slice(0, 4);
+  const collected: PriceCandidate[] = [];
 
-  const detailCandidates = await collectMarketDetailCandidates("KREAM", listCandidates, identity, "KRW");
-  const searchDetailCandidates = await collectKreamSearchDetailCandidates(html, identity);
+  for (const query of queries) {
+    const url = `https://kream.co.kr/search?keyword=${encodeURIComponent(query)}`;
+    const html = await fetchHtml(url).catch(() => "");
+    if (!html) continue;
 
-  return filterStructuredCandidates(
-    [...listCandidates, ...detailCandidates, ...searchDetailCandidates],
-    identity
-  ).slice(0, 24);
+    const listCandidates = extractHtmlCards(html, "kream.co.kr", query, identity, "listing").map((candidate) => ({
+      ...candidate,
+      market: "KREAM",
+      currency: candidate.currency || "KRW",
+      approximateKrw: convertToKrw(candidate.price, candidate.currency || "KRW")
+    }));
+
+    const detailCandidates = await collectMarketDetailCandidates("KREAM", listCandidates, identity, "KRW");
+    const searchDetailCandidates = await collectKreamSearchDetailCandidates(html, identity);
+    collected.push(...listCandidates, ...detailCandidates, ...searchDetailCandidates);
+
+    const filtered = filterStructuredCandidates(dedupePriceCandidates(collected), identity);
+    if (filtered.length >= 3 || filtered.some((candidate) => candidate.saleType === "sold")) {
+      return filtered.slice(0, 24);
+    }
+  }
+
+  return filterStructuredCandidates(dedupePriceCandidates(collected), identity).slice(0, 24);
 }
 
 async function collectKreamSearchDetailCandidates(html: string, identity: CardIdentity) {
@@ -2482,9 +2491,10 @@ function marketNativeQueries(
 
   if (market === "kream") {
     return uniqueNonEmpty([
-      joinSearchParts([strippedLocalized, number, condition]),
       joinSearchParts([strippedLocalized, number]),
+      joinSearchParts([strippedLocalized, "프로모", number]),
       joinSearchParts([strippedLocalized, rarity, number]),
+      joinSearchParts([strippedLocalized, number, condition]),
       joinSearchParts([strippedEnglish, number, condition]),
       joinSearchParts([strippedEnglish, number])
     ]).slice(0, 5);
