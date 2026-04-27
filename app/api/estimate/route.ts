@@ -3012,8 +3012,8 @@ function ensureRequiredSources(
       url: source.url,
       note:
         coverage[source.market]?.count > 0
-          ? `required source collected - ${coverage[source.market]?.count} candidates found`
-          : "required source missing - no structured candidates collected"
+          ? `required source collected - count=${coverage[source.market]?.count} direct=${coverage[source.market]?.directCount}`
+          : "required source missing - count=0 direct=0"
     }));
 
   const merged = [...sources, ...required];
