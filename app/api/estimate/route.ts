@@ -172,6 +172,7 @@ const FX_USD_KRW = Number(process.env.FX_USD_KRW) || 1400;
 const FX_JPY_KRW = Number(process.env.FX_JPY_KRW) || 9.5;
 const FX_EUR_KRW = Number(process.env.FX_EUR_KRW) || 1550;
 const FX_GBP_KRW = Number(process.env.FX_GBP_KRW) || 1800;
+const FX_HKD_KRW = Number(process.env.FX_HKD_KRW) || 178;
 const POKEMON_NAME_ENTRIES = pokemonMultilang as PokemonNameEntry[];
 const POKEMON_NAME_INDEX = buildPokemonNameIndex(POKEMON_NAME_ENTRIES);
 
@@ -409,7 +410,8 @@ async function collectMarketContext(identity: CardIdentity) {
       USD_KRW: FX_USD_KRW,
       JPY_KRW: FX_JPY_KRW,
       EUR_KRW: FX_EUR_KRW,
-      GBP_KRW: FX_GBP_KRW
+      GBP_KRW: FX_GBP_KRW,
+      HKD_KRW: FX_HKD_KRW
     },
     searchPlan,
     requiredSources: buildRequiredSourceTargets(identity, searchPlan),
@@ -791,6 +793,7 @@ async function collectSnkrdunk(
   searchPlan: MarketSearchPlan
 ): Promise<PriceCandidate[]> {
   const query = searchPlan.marketQueries.snkrdunk[0] || buildSourceQuery(identity);
+  const apiCandidates = await collectSnkrdunkSearchApi(identity, query).catch(() => []);
   const url = `https://snkrdunk.com/en/search/result?keyword=${encodeURIComponent(query)}`;
   const html = await fetchHtml(url);
   const listCandidates = extractHtmlCards(html, "snkrdunk.com", query, identity, "listing").map((candidate) => ({
@@ -802,12 +805,70 @@ async function collectSnkrdunk(
 
   const detailCandidates = await collectMarketDetailCandidates(
     "SNKRDUNK",
-    listCandidates,
+    [...apiCandidates, ...listCandidates],
     identity,
     "JPY"
   );
 
-  return filterStructuredCandidates([...listCandidates, ...detailCandidates], identity).slice(0, 18);
+  return filterStructuredCandidates([...apiCandidates, ...listCandidates, ...detailCandidates], identity).slice(0, 24);
+}
+
+async function collectSnkrdunkSearchApi(identity: CardIdentity, query: string): Promise<PriceCandidate[]> {
+  const url = new URL("https://snkrdunk.com/en/v1/search");
+  url.searchParams.set("keyword", query);
+  url.searchParams.set("perPage", "12");
+  url.searchParams.set("page", "1");
+
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      Accept: "application/json, text/plain, */*",
+      Referer: `https://snkrdunk.com/en/search/result?keyword=${encodeURIComponent(query)}`,
+      Origin: "https://snkrdunk.com"
+    },
+    cache: "no-store"
+  });
+
+  if (!response.ok) return [];
+
+  const payload = (await response.json()) as {
+    sneakers?: Array<Record<string, unknown>>;
+    streetwears?: Array<Record<string, unknown>>;
+  };
+
+  const items = [...(payload.sneakers || []), ...(payload.streetwears || [])];
+  const searchUrl = `https://snkrdunk.com/en/search/result?keyword=${encodeURIComponent(query)}`;
+
+  return filterStructuredCandidates(
+    items
+      .map((item) => {
+        const title = cleanString(String(item.name || ""));
+        const value = Number(item.minPrice) || 0;
+        const minPriceFormat = cleanString(String(item.minPriceFormat || ""));
+        const currency = detectCurrencyFromText(minPriceFormat) || "USD";
+        const classification = classifyCandidate(title, identity);
+        return {
+          title,
+          market: "SNKRDUNK",
+          url: searchUrl,
+          price: value,
+          currency,
+          approximateKrw: convertToKrw(value, currency),
+          saleType: "listing" as const,
+          condition: normalizeCandidateCondition(title, identity, "listing"),
+          language: identity.language,
+          exactMatch: classification.exactMatch,
+          excludeReason: classification.excludeReason,
+          marketSearchQuery: query,
+          matchScore: classification.matchScore,
+          numberMatch: classification.numberMatch,
+          conditionMatch: classification.conditionMatch
+        } satisfies PriceCandidate;
+      })
+      .filter((candidate) => candidate.price > 0),
+    identity
+  ).slice(0, 12);
 }
 
 async function collectKream(
@@ -1559,6 +1620,15 @@ function extractFirstPrice(snippet: string) {
   return null;
 }
 
+function detectCurrencyFromText(value: string) {
+  const text = value.toUpperCase();
+  if (text.includes("US $") || text.includes("USD") || text.includes("$")) return "USD";
+  if (text.includes("¥") || text.includes("JPY")) return "JPY";
+  if (text.includes("₩") || text.includes("KRW") || text.includes("원")) return "KRW";
+  if (text.includes("HK$")) return "HKD";
+  return "";
+}
+
 function stripTags(value: string) {
   return value.replace(/<[^>]+>/g, " ");
 }
@@ -1760,6 +1830,7 @@ function convertToKrw(value: number, currency: string) {
   if (normalized === "JPY") return Math.round(value * FX_JPY_KRW);
   if (normalized === "EUR") return Math.round(value * FX_EUR_KRW);
   if (normalized === "GBP") return Math.round(value * FX_GBP_KRW);
+  if (normalized === "HKD") return Math.round(value * FX_HKD_KRW);
   return Math.round(value);
 }
 
@@ -2094,8 +2165,7 @@ function normalizeEstimate(input: EstimateResponse, identity: CardIdentity, mark
   const markets = mergeMarketQuotes(collectorMarkets, aiMarkets).slice(0, 8);
   const exactCandidates = exactStructuredCandidates(marketContext, identity);
   const normalizedPrice = normalizePriceBand(input.price, markets, identity.targetCondition);
-  const strictFailure =
-    shouldRejectPriceEstimate(identity, exactCandidates, normalizedPrice) || !hasAllRequiredSourceCoverage(marketContext);
+  const strictFailure = shouldRejectPriceEstimate(identity, exactCandidates, normalizedPrice);
 
   const summaryPrefix =
     identity.validationWarnings && identity.validationWarnings.length > 0
@@ -2124,7 +2194,7 @@ function normalizeEstimate(input: EstimateResponse, identity: CardIdentity, mark
       medianKrw: strictFailure ? 0 : normalizedPrice.medianKrw,
       confidence: strictFailure || identity.confidence < 65 ? "low" : normalizedPrice.confidence,
       summary: strictFailure
-        ? `${summaryPrefix}필수 시세 소스 수집이 아직 충분하지 않아 가격을 숨깁니다. KREAM, SNKRDUNK, eBay, PriceCharting 기준 데이터가 모두 확인될 때만 시세를 노출합니다.`
+        ? `${summaryPrefix}정확히 일치하는 거래 근거가 부족해 가격을 숨깁니다. 다만 KREAM, SNKRDUNK, eBay, PriceCharting는 계속 조회합니다.`
         : `${summaryPrefix}${input.price?.summary || "가격 후보가 충분하지 않아 보수적으로 추정했습니다."}`
     },
     markets: strictFailure ? markets.slice(0, 4) : markets,
@@ -2771,11 +2841,6 @@ function sourceCoverageMap(marketContext?: unknown) {
   const coverage = (marketContext as { sourceCoverage?: Record<string, { count: number; directCount: number }> } | undefined)
     ?.sourceCoverage;
   return coverage || {};
-}
-
-function hasAllRequiredSourceCoverage(marketContext?: unknown) {
-  const coverage = sourceCoverageMap(marketContext);
-  return ["KREAM", "SNKRDUNK", "eBay", "PriceCharting"].every((market) => (coverage[market]?.count || 0) > 0);
 }
 
 function mockEstimate(input: EstimateRequest): EstimateResponse {
