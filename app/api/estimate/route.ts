@@ -886,7 +886,7 @@ function extractMarketDetailCandidates(
 ) {
   const embeddedCandidates =
     market === "KREAM"
-      ? extractKreamNuxtCandidates(html, detailUrl, identity)
+      ? [...extractKreamRenderedSummaryCandidates(html, detailUrl, identity), ...extractKreamNuxtCandidates(html, detailUrl, identity)]
       : [];
   const normalizedHtml = decodeHtml(html);
   const text = decodeHtml(stripTags(html)).replace(/\s+/g, " ").trim();
@@ -903,6 +903,69 @@ function extractMarketDetailCandidates(
   return dedupePriceCandidates([...embeddedCandidates, ...candidates])
     .filter((candidate) => candidateSupportsIdentity(candidate, identity))
     .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
+}
+
+function extractKreamRenderedSummaryCandidates(html: string, detailUrl: string, identity: CardIdentity) {
+  const salesSection = extractHtmlSectionById(html, "sales", "asks");
+  const asksSection = extractHtmlSectionById(html, "asks", "bids");
+  const bidsSection = extractHtmlSectionById(html, "bids", "</div><!--]--><!--]--></div>");
+
+  return dedupePriceCandidates([
+    ...parseKreamRenderedSection(salesSection, detailUrl, identity, "sold"),
+    ...parseKreamRenderedSection(asksSection, detailUrl, identity, "listing"),
+    ...parseKreamRenderedSection(bidsSection, detailUrl, identity, "listing")
+  ]);
+}
+
+function extractHtmlSectionById(html: string, id: string, nextMarker: string) {
+  const start = html.indexOf(`id="${id}"`);
+  if (start < 0) return "";
+  const rest = html.slice(start);
+  const end = nextMarker ? rest.indexOf(`id="${nextMarker}"`) : -1;
+  return end >= 0 ? rest.slice(0, end) : rest;
+}
+
+function parseKreamRenderedSection(
+  section: string,
+  detailUrl: string,
+  identity: CardIdentity,
+  saleType: "sold" | "listing"
+) {
+  if (!section) return [];
+
+  const candidates: PriceCandidate[] = [];
+  const targetTerms = detailConditionTerms(identity.targetCondition).map((term) => term.toLowerCase());
+  const rowPattern =
+    /transaction_history_summary__content__item_option[^>]*>([^<]+)<\/div>\s*<div class="transaction_history_summary__content__item_price"[^>]*>\s*([\d,]+)원[\s\S]{0,120}?<div[^>]*>([^<]+)<\/div>/g;
+
+  for (const match of section.matchAll(rowPattern)) {
+    const optionLabel = cleanString(decodeHtml(match[1]));
+    if (!matchesTargetOption(optionLabel, targetTerms)) continue;
+
+    const price = Number(match[2].replace(/,/g, ""));
+    if (!price) continue;
+
+    const trailing = cleanString(decodeHtml(match[3]));
+    const label =
+      saleType === "sold"
+        ? `${optionLabel} 체결 거래 ${trailing}`.trim()
+        : `${optionLabel} ${section.includes('id="bids"') ? "즉시 판매가" : "즉시 구매가"} ${trailing}`.trim();
+
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market: "KREAM",
+        detailUrl,
+        defaultCurrency: "KRW",
+        price,
+        saleType,
+        title: `${identity.name} ${identity.number} ${label}`,
+        matchScore: saleType === "sold" ? 100 : 99
+      })
+    );
+  }
+
+  return candidates;
 }
 
 function extractKreamNuxtCandidates(html: string, detailUrl: string, identity: CardIdentity) {
@@ -2320,6 +2383,48 @@ function exactConditionQueries(identity: CardIdentity) {
   ]);
 }
 
+function marketNativeQueries(
+  market: "kream" | "snkrdunk" | "ebay",
+  identity: CardIdentity
+) {
+  const englishName = englishCardName(identity);
+  const localizedName = localizedCardName(identity);
+  const strippedEnglish = stripCardDecorators(englishName);
+  const strippedLocalized = stripCardDecorators(localizedName);
+  const number = identity.number === "Unknown" ? "" : identity.number;
+  const condition = conditionSearchTerm(identity.targetCondition);
+  const setCode = setCodeFromIdentity(identity);
+  const rarity = identity.rarity === "Unknown rarity" ? "" : identity.rarity;
+
+  if (market === "kream") {
+    return uniqueNonEmpty([
+      joinSearchParts([strippedLocalized, number, condition]),
+      joinSearchParts([strippedLocalized, number]),
+      joinSearchParts([strippedLocalized, rarity, number]),
+      joinSearchParts([strippedEnglish, number, condition]),
+      joinSearchParts([strippedEnglish, number])
+    ]).slice(0, 5);
+  }
+
+  if (market === "snkrdunk") {
+    return uniqueNonEmpty([
+      joinSearchParts([strippedEnglish, number, condition]),
+      joinSearchParts([strippedEnglish, number]),
+      joinSearchParts([strippedEnglish, rarity, number]),
+      joinSearchParts([strippedLocalized, number, condition]),
+      joinSearchParts([strippedLocalized, number])
+    ]).slice(0, 5);
+  }
+
+  return uniqueNonEmpty([
+    joinSearchParts([strippedEnglish, number, condition]),
+    joinSearchParts([strippedEnglish, rarity, number, condition]),
+    joinSearchParts([strippedEnglish, number, setCode, condition]),
+    joinSearchParts([strippedEnglish, number]),
+    joinSearchParts([strippedEnglish, number, "Pokemon card"])
+  ]).slice(0, 5);
+}
+
 function buildMarketSearchPlan(identity: CardIdentity): MarketSearchPlan {
   const englishName = englishCardName(identity);
   const name = englishName || stripCardDecorators(identity.name);
@@ -2345,6 +2450,9 @@ function buildMarketSearchPlan(identity: CardIdentity): MarketSearchPlan {
   const localizedBroad = broadQueries.find((query) => /[가-힣]/.test(query)) || primaryBroad;
   const conditionQuery = joinSearchParts([primaryBroad, condition]);
   const primaryConditionQuery = exactQueries[0] || labelQueries[0] || conditionQuery;
+  const kreamQueries = marketNativeQueries("kream", identity);
+  const snkrdunkQueries = marketNativeQueries("snkrdunk", identity);
+  const ebayQueries = marketNativeQueries("ebay", identity);
 
   return {
     canonical: {
@@ -2362,8 +2470,8 @@ function buildMarketSearchPlan(identity: CardIdentity): MarketSearchPlan {
     },
     broadQueries,
     marketQueries: {
-      kream: uniqueNonEmpty([localizedBroad, primaryBroad, joinSearchParts([localizedName, number])]).slice(0, 3),
-      snkrdunk: uniqueNonEmpty([primaryBroad, joinSearchParts([name, number]), number]).slice(0, 3),
+      kream: uniqueNonEmpty([...kreamQueries, localizedBroad, primaryBroad]).slice(0, 5),
+      snkrdunk: uniqueNonEmpty([...snkrdunkQueries, primaryBroad, joinSearchParts([name, number]), number]).slice(0, 5),
       pricecharting: uniqueNonEmpty([
         primaryConditionQuery,
         ...exactQueries,
@@ -2372,6 +2480,7 @@ function buildMarketSearchPlan(identity: CardIdentity): MarketSearchPlan {
         joinSearchParts([name, number])
       ]).slice(0, 5),
       ebaySold: uniqueNonEmpty([
+        ...ebayQueries,
         primaryConditionQuery,
         ...exactQueries,
         ...labelQueries,
@@ -2380,6 +2489,7 @@ function buildMarketSearchPlan(identity: CardIdentity): MarketSearchPlan {
         joinSearchParts([name, number, "sold"])
       ]).slice(0, 6),
       ebayCurrent: uniqueNonEmpty([
+        ...ebayQueries,
         primaryConditionQuery,
         ...exactQueries,
         ...labelQueries,
