@@ -404,13 +404,7 @@ async function generateGeminiContent(parts: Array<Record<string, unknown>>) {
 
 async function collectMarketContext(identity: CardIdentity) {
   const searchPlan = buildMarketSearchPlan(identity);
-  const shouldRunPerplexity = needsPerplexityResearch(identity);
-  const [perplexity, ebayBrowse, ebaySold, ebayCurrent, priceCharting, snkrdunk, kream] = await Promise.all([
-    shouldRunPerplexity
-      ? withTimeout(searchMarketPrices(identity, searchPlan), 25000, "Perplexity search timed out").catch((error) => ({
-          error: error instanceof Error ? error.message : "Perplexity search failed"
-        }))
-      : Promise.resolve({ skipped: true, reason: "high-confidence structured identity" }),
+  const [ebayBrowse, ebaySold, ebayCurrent, priceCharting, snkrdunk, kream] = await Promise.all([
     searchEbayBrowse(identity, searchPlan),
     withTimeout(collectEbayHtml(identity, searchPlan, "sold"), 20000, "eBay sold collector timed out").catch(() => []),
     withTimeout(collectEbayHtml(identity, searchPlan, "current"), 20000, "eBay current collector timed out").catch(
@@ -422,6 +416,12 @@ async function collectMarketContext(identity: CardIdentity) {
   ]);
 
   const direct = mergeStructuredCandidates(ebaySold, ebayCurrent, priceCharting, snkrdunk, kream);
+  const shouldRunPerplexity = needsPerplexityResearch(identity) || direct.length === 0;
+  const perplexity = shouldRunPerplexity
+    ? await withTimeout(searchMarketPrices(identity, searchPlan), 25000, "Perplexity search timed out").catch((error) => ({
+        error: error instanceof Error ? error.message : "Perplexity search failed"
+      }))
+    : { skipped: true, reason: "high-confidence structured identity with direct market coverage" };
 
   return {
     generatedAt: new Date().toISOString(),
