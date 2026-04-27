@@ -454,6 +454,7 @@ async function collectMarketContext(identity: CardIdentity) {
         error: error instanceof Error ? error.message : "Perplexity search failed"
       }))
     : { skipped: true, reason: "high-confidence structured identity with direct market coverage" };
+  const perplexityCandidates = extractPerplexityStructuredCandidates(perplexity, identity);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -472,7 +473,7 @@ async function collectMarketContext(identity: CardIdentity) {
       SNKRDUNK: { count: snkrdunk.length, directCount: snkrdunk.length },
       KREAM: { count: kream.length, directCount: kream.length }
     },
-    structuredCandidates: mergeStructuredCandidates(direct, ebayBrowse),
+    structuredCandidates: mergeStructuredCandidates(direct, ebayBrowse, perplexityCandidates),
     directCandidates: direct,
     perplexity
   };
@@ -519,6 +520,8 @@ async function searchMarketPrices(identity: CardIdentity, searchPlan: MarketSear
     "- PriceCharting, Sports Card Investor, Scrydex, TCGplayer, Cardmarket, PSA APR when they clearly match the exact card.",
     "- SNKRDUNK and KREAM if visible. IMPORTANT: search these markets with short broad queries first, then classify the clicked result as raw or PSA.",
     "- Korean marketplace pages only when the exact card number and version are visible",
+    "- For Korean promo or Korean PSA cards, prioritize KREAM and SNKRDUNK transaction history, current ask, and current bid if visible.",
+    "- If KREAM or SNKRDUNK show option-level PSA 10 transaction rows, include those exact rows as separate candidates.",
     "",
     "MARKET QUERY STRATEGY:",
     "- Do not use one long query for every market.",
@@ -3591,6 +3594,75 @@ function extractUnstructuredCandidates(
   });
 
   return candidates;
+}
+
+function extractPerplexityStructuredCandidates(perplexity: unknown, identity: CardIdentity): PriceCandidate[] {
+  const content = extractPerplexityContent(perplexity);
+  if (!content) return [];
+
+  let parsed: any;
+  try {
+    parsed = parseJsonObject(content);
+  } catch {
+    return [];
+  }
+
+  const rawCandidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
+  const normalized = rawCandidates
+    .map((candidate: any) => {
+      const price = Number(candidate?.price);
+      const currency = cleanString(candidate?.currency || detectCurrencyFromText(String(candidate?.price || "")) || "KRW").toUpperCase();
+      const url = cleanString(candidate?.url);
+      const title = cleanString(candidate?.title);
+      if (!price || !url || !title) return null;
+
+      const saleType =
+        candidate?.saleType === "sold" || candidate?.saleType === "listing" ? candidate.saleType : "listing";
+      const condition = cleanString(candidate?.condition) || normalizeCandidateCondition(title, identity, saleType);
+      const language = cleanString(candidate?.language) || identity.language;
+      const exactMatch = Boolean(candidate?.exactMatch);
+      const matchScore = Number(candidate?.matchScore) || 0;
+      const numberMatch = candidate?.numberMatch !== false;
+      const conditionMatch = candidate?.conditionMatch !== false;
+      const market = cleanString(candidate?.market) || guessMarket(url);
+
+      return {
+        title,
+        market,
+        url,
+        price,
+        currency,
+        approximateKrw: convertToKrw(price, currency),
+        saleType,
+        condition,
+        language,
+        exactMatch,
+        excludeReason: cleanString(candidate?.excludeReason),
+        marketSearchQuery: cleanString(candidate?.marketSearchQuery) || identity.searchQueries[0],
+        matchScore,
+        numberMatch,
+        conditionMatch
+      } satisfies PriceCandidate;
+    })
+    .filter((candidate: PriceCandidate | null): candidate is PriceCandidate => Boolean(candidate));
+
+  return filterStructuredCandidates(normalized, identity).slice(0, 18);
+}
+
+function extractPerplexityContent(perplexity: unknown) {
+  const payload = perplexity as
+    | { choices?: Array<{ message?: { content?: string } }> }
+    | Record<string, unknown>
+    | undefined;
+
+  if (payload && typeof payload === "object" && "content" in payload && typeof payload.content === "string") {
+    return payload.content;
+  }
+  if (payload && typeof payload === "object" && "choices" in payload) {
+    const choices = payload.choices as Array<{ message?: { content?: string } }> | undefined;
+    return choices?.[0]?.message?.content || "";
+  }
+  return "";
 }
 
 function surroundingText(text: string, index: number) {
