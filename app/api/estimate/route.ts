@@ -813,8 +813,41 @@ async function collectKream(
   }));
 
   const detailCandidates = await collectMarketDetailCandidates("KREAM", listCandidates, identity, "KRW");
+  const searchDetailCandidates = await collectKreamSearchDetailCandidates(html, identity);
 
-  return filterStructuredCandidates([...listCandidates, ...detailCandidates], identity).slice(0, 18);
+  return filterStructuredCandidates(
+    [...listCandidates, ...detailCandidates, ...searchDetailCandidates],
+    identity
+  ).slice(0, 24);
+}
+
+async function collectKreamSearchDetailCandidates(html: string, identity: CardIdentity) {
+  const detailUrls = extractKreamSearchDetailUrls(html).slice(0, 6);
+  if (detailUrls.length === 0) return [];
+
+  const pages = await Promise.all(
+    detailUrls.map(async (detailUrl) => {
+      try {
+        const detailHtml = await fetchHtml(detailUrl);
+        return extractMarketDetailCandidates(detailHtml, detailUrl, "KREAM", identity, "KRW");
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  return filterStructuredCandidates(pages.flat(), identity).slice(0, 18);
+}
+
+function extractKreamSearchDetailUrls(html: string) {
+  const ids = [
+    ...html.matchAll(/product_(?:price|wish|link)\/(\d{4,})/g),
+    ...html.matchAll(/\/products\/(\d{4,})/g)
+  ]
+    .map((match) => match[1])
+    .filter(Boolean);
+
+  return uniqueNonEmpty(ids.map((id) => `https://kream.co.kr/products/${id}`));
 }
 
 async function collectMarketDetailCandidates(
