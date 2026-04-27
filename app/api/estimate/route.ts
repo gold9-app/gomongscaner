@@ -1206,15 +1206,19 @@ function makeDetailCandidate(args: {
   matchScore: number;
 }): PriceCandidate {
   const { identity, market, detailUrl, defaultCurrency, price, saleType, title, matchScore } = args;
+  const setName =
+    identity.setName && identity.setName !== "Unknown set" ? identity.setName : "";
+  const normalizedTitle =
+    setName && !title.toLowerCase().includes(setName.toLowerCase()) ? `${title} ${setName}` : title;
   return {
-    title,
+    title: normalizedTitle,
     market,
     url: detailUrl,
     price,
     currency: defaultCurrency,
     approximateKrw: convertToKrw(price, defaultCurrency),
     saleType,
-    condition: normalizeCandidateCondition(title, identity, saleType),
+    condition: normalizeCandidateCondition(normalizedTitle, identity, saleType),
     language: identity.language,
     exactMatch: true,
     excludeReason: "",
