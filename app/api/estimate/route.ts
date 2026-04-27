@@ -1444,6 +1444,7 @@ function validationWarningsForIdentity(identity: CardIdentity) {
   if (identity.setName === "Unknown set" && !identity.productLine) warnings.push("set-unknown");
   if (identity.language === "Unknown") warnings.push("language-unknown");
   if (identity.rarity === "Unknown rarity") warnings.push("rarity-unknown");
+  if (hasRegionalSetMismatch(identity)) warnings.push("regional-set-mismatch");
   return warnings;
 }
 
@@ -1460,6 +1461,7 @@ function adjustIdentityConfidence(
   }
   if (warnings.includes("set-unknown")) adjusted -= 6;
   if (warnings.includes("language-unknown")) adjusted -= 4;
+  if (warnings.includes("regional-set-mismatch")) adjusted -= 18;
   if (candidates.length >= 2 && candidates[0].confidence - candidates[1].confidence < 12) {
     adjusted = Math.min(adjusted, 68);
   }
@@ -1545,7 +1547,9 @@ function normalizeEstimate(input: EstimateResponse, identity: CardIdentity, mark
     : [];
   const collectorMarkets = structuredCandidatesToMarkets(marketContext, identity);
   const markets = mergeMarketQuotes(collectorMarkets, aiMarkets).slice(0, 8);
+  const exactCandidates = exactStructuredCandidates(marketContext, identity);
   const normalizedPrice = normalizePriceBand(input.price, markets, identity.targetCondition);
+  const strictFailure = shouldRejectPriceEstimate(identity, exactCandidates, normalizedPrice);
 
   const summaryPrefix =
     identity.validationWarnings && identity.validationWarnings.length > 0
@@ -1569,13 +1573,15 @@ function normalizeEstimate(input: EstimateResponse, identity: CardIdentity, mark
       confidence: clamp(Number(input.card?.confidence) || identity.confidence, 0, 100)
     },
     price: {
-      lowKrw: normalizedPrice.lowKrw,
-      highKrw: normalizedPrice.highKrw,
-      medianKrw: normalizedPrice.medianKrw,
-      confidence: identity.confidence < 65 ? "low" : normalizedPrice.confidence,
-      summary: `${summaryPrefix}${input.price?.summary || "가격 후보가 충분하지 않아 보수적으로 추정했습니다."}`
+      lowKrw: strictFailure ? 0 : normalizedPrice.lowKrw,
+      highKrw: strictFailure ? 0 : normalizedPrice.highKrw,
+      medianKrw: strictFailure ? 0 : normalizedPrice.medianKrw,
+      confidence: strictFailure || identity.confidence < 65 ? "low" : normalizedPrice.confidence,
+      summary: strictFailure
+        ? `${summaryPrefix}정확히 일치하는 거래 근거가 부족해 가격을 숨깁니다. 카드명, 번호, 언어, 세트, 상태를 더 구체적으로 확인해 주세요.`
+        : `${summaryPrefix}${input.price?.summary || "가격 후보가 충분하지 않아 보수적으로 추정했습니다."}`
     },
-    markets,
+    markets: strictFailure ? markets.slice(0, 4) : markets,
     sources: ensureRequiredSources(Array.isArray(input.sources) ? input.sources.slice(0, 8) : [], identity),
     usedMock: false
   };
@@ -2363,11 +2369,8 @@ function extractStructuredCandidates(marketContext: unknown): PriceCandidate[] {
 }
 
 function structuredCandidatesToMarkets(marketContext: unknown, identity: CardIdentity): MarketQuote[] {
-  return extractStructuredCandidates(marketContext)
+  return exactStructuredCandidates(marketContext, identity)
     .filter((candidate) => candidate.approximateKrw > 0)
-    .filter((candidate) => candidate.numberMatch !== false)
-    .filter((candidate) => candidate.conditionMatch !== false || candidate.exactMatch)
-    .filter((candidate) => (candidate.matchScore ?? 0) >= 70 || candidate.exactMatch)
     .map((candidate) => ({
       market: candidate.market,
       label: candidate.title,
@@ -2379,6 +2382,15 @@ function structuredCandidatesToMarkets(marketContext: unknown, identity: CardIde
     }))
     .map((market) => scoreMarketQuote(market, identity.targetCondition))
     .sort((a, b) => (b.evidenceScore || 0) - (a.evidenceScore || 0));
+}
+
+function exactStructuredCandidates(marketContext: unknown, identity: CardIdentity): PriceCandidate[] {
+  return extractStructuredCandidates(marketContext)
+    .filter((candidate) => candidate.approximateKrw > 0)
+    .filter((candidate) => candidate.numberMatch !== false)
+    .filter((candidate) => candidate.conditionMatch !== false || candidate.exactMatch)
+    .filter((candidate) => (candidate.matchScore ?? 0) >= 80 || candidate.exactMatch)
+    .filter((candidate) => candidateSupportsIdentity(candidate, identity));
 }
 
 function mergeMarketQuotes(...groups: MarketQuote[][]) {
@@ -2397,6 +2409,72 @@ function mergeMarketQuotes(...groups: MarketQuote[][]) {
 
 function inferSoldDate(title: string) {
   return title.match(/\b(20\d{2}-\d{2}-\d{2})\b/)?.[1];
+}
+
+function shouldRejectPriceEstimate(
+  identity: CardIdentity,
+  exactCandidates: PriceCandidate[],
+  normalizedPrice: Pick<PriceEstimate, "lowKrw" | "highKrw" | "medianKrw" | "confidence">
+) {
+  if (normalizedPrice.medianKrw <= 0) return true;
+  if (identity.validationWarnings?.includes("regional-set-mismatch")) return true;
+  if (identity.confidence < 72) return true;
+
+  const soldCount = exactCandidates.filter((candidate) => candidate.saleType === "sold").length;
+  const listingCount = exactCandidates.filter((candidate) => candidate.saleType === "listing").length;
+  const totalCount = exactCandidates.length;
+
+  if (identity.targetCondition === "psa10" || identity.targetCondition === "psa9") {
+    return soldCount < 1 && totalCount < 2;
+  }
+
+  return soldCount < 1 && listingCount < 2;
+}
+
+function candidateSupportsIdentity(candidate: PriceCandidate, identity: CardIdentity) {
+  const haystack = `${candidate.title} ${candidate.url}`.toLowerCase();
+  if (!contextMatchesIdentity(candidate.title, candidate.url, identity)) return false;
+
+  const signals = setSignalsForIdentity(identity);
+  if (signals.required && !signals.signals.some((signal) => haystack.includes(signal))) {
+    return false;
+  }
+
+  return true;
+}
+
+function setSignalsForIdentity(identity: CardIdentity) {
+  const setCode = setCodeFromIdentity(identity).toLowerCase();
+  const tokenCandidates = identity.setName
+    .toLowerCase()
+    .split(/[^a-z0-9가-힣ぁ-ゟ゠-ヿ一-龯]+/)
+    .filter((token) => token.length >= 3)
+    .filter((token) => !["pokemon", "class", "pack", "high", "card", "the", "set"].includes(token));
+
+  return {
+    required: identity.setName !== "Unknown set" || Boolean(setCode),
+    signals: uniqueNonEmpty([setCode, ...tokenCandidates])
+  };
+}
+
+function hasRegionalSetMismatch(identity: CardIdentity) {
+  const language = identity.language.toLowerCase();
+  const setName = identity.setName.toLowerCase();
+  const setCode = setCodeFromIdentity(identity).toLowerCase();
+  const asciiOnlySet = /^[a-z0-9 :&'\\-]+$/.test(setName);
+  const englishMainSet =
+    /(paldea evolved|obsidian flames|paradox rift|temporal forces|twilight masquerade|stellar crown|surging sparks|journey together|scarlet & violet 151)/.test(
+      setName
+    );
+
+  if (language.includes("japanese")) {
+    if (englishMainSet) return true;
+    if (asciiOnlySet && !setCode && setName !== "unknown set") return true;
+  }
+
+  if (language.includes("korean") && englishMainSet) return true;
+
+  return false;
 }
 
 function extractUnstructuredCandidates(
