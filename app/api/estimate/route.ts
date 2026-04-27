@@ -394,10 +394,13 @@ async function generateGeminiContent(parts: Array<Record<string, unknown>>) {
 
 async function collectMarketContext(identity: CardIdentity) {
   const searchPlan = buildMarketSearchPlan(identity);
+  const shouldRunPerplexity = needsPerplexityResearch(identity);
   const [perplexity, ebayBrowse, ebaySold, ebayCurrent, priceCharting, snkrdunk, kream] = await Promise.all([
-    withTimeout(searchMarketPrices(identity, searchPlan), 25000, "Perplexity search timed out").catch((error) => ({
-      error: error instanceof Error ? error.message : "Perplexity search failed"
-    })),
+    shouldRunPerplexity
+      ? withTimeout(searchMarketPrices(identity, searchPlan), 25000, "Perplexity search timed out").catch((error) => ({
+          error: error instanceof Error ? error.message : "Perplexity search failed"
+        }))
+      : Promise.resolve({ skipped: true, reason: "high-confidence structured identity" }),
     searchEbayBrowse(identity, searchPlan),
     withTimeout(collectEbayHtml(identity, searchPlan, "sold"), 20000, "eBay sold collector timed out").catch(() => []),
     withTimeout(collectEbayHtml(identity, searchPlan, "current"), 20000, "eBay current collector timed out").catch(
@@ -431,6 +434,15 @@ async function collectMarketContext(identity: CardIdentity) {
     directCandidates: direct,
     perplexity
   };
+}
+
+function needsPerplexityResearch(identity: CardIdentity) {
+  if (identity.confidence < 92) return true;
+  if (identity.number === "Unknown") return true;
+  if (identity.setName === "Unknown set") return true;
+  if (identity.language === "Unknown") return true;
+  if (identity.targetCondition === "raw" && identity.rarity === "Unknown rarity") return true;
+  return false;
 }
 
 async function searchMarketPrices(identity: CardIdentity, searchPlan: MarketSearchPlan) {
@@ -686,7 +698,8 @@ async function searchEbayBrowse(
     headers: {
       Authorization: `Bearer ${token}`,
       "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US"
-    }
+    },
+    signal: AbortSignal.timeout(10000)
   });
 
   if (!response.ok) {
@@ -833,7 +846,8 @@ async function collectSnkrdunkSearchApi(identity: CardIdentity, query: string): 
       Referer: `https://snkrdunk.com/en/search/result?keyword=${encodeURIComponent(query)}`,
       Origin: "https://snkrdunk.com"
     },
-    cache: "no-store"
+    cache: "no-store",
+    signal: AbortSignal.timeout(10000)
   });
 
   if (!response.ok) return [];
