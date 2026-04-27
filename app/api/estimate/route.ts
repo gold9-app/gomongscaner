@@ -1128,6 +1128,7 @@ function extractMarketDetailCandidates(
       : [];
   const normalizedHtml = decodeHtml(html);
   const text = decodeHtml(stripTags(html)).replace(/\s+/g, " ").trim();
+  const textCandidates = market === "KREAM" ? extractKreamPlainTextCandidates(text, detailUrl, identity) : [];
   const windows = buildDetailWindows(normalizedHtml, text, identity, market);
   const candidates: PriceCandidate[] = [];
 
@@ -1138,9 +1139,39 @@ function extractMarketDetailCandidates(
     );
   }
 
-  return dedupePriceCandidates([...embeddedCandidates, ...candidates])
+  return dedupePriceCandidates([...embeddedCandidates, ...textCandidates, ...candidates])
     .filter((candidate) => candidateSupportsIdentity(candidate, identity))
     .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
+}
+
+function extractKreamPlainTextCandidates(text: string, detailUrl: string, identity: CardIdentity) {
+  if (!text) return [];
+
+  const candidates: PriceCandidate[] = [];
+  const targetTerms = detailConditionTerms(identity.targetCondition);
+  const salePattern =
+    /\b(PSA\s*10|PSA10|PSA\s*9|PSA9|BGS\s*10|BGS10|CGC\s*10|CGC10|Ungraded|Raw)\b\s*(\d{1,3}(?:,\d{3})+)원\s*(\d+\s*(?:분|시간|일|주|개월)\s*전|20\d{2}[./-]\d{2}[./-]\d{2})/gi;
+
+  for (const match of text.matchAll(salePattern)) {
+    const optionLabel = cleanString(match[1]);
+    if (!matchesTargetOption(optionLabel, targetTerms.map((term) => term.toLowerCase()))) continue;
+    const price = Number(match[2].replace(/,/g, ""));
+    if (!price) continue;
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market: "KREAM",
+        detailUrl,
+        defaultCurrency: "KRW",
+        price,
+        saleType: "sold",
+        title: `${identity.name} ${identity.number} ${optionLabel} 체결 거래 ${cleanString(match[3])}`,
+        matchScore: 100
+      })
+    );
+  }
+
+  return dedupePriceCandidates(candidates);
 }
 
 function extractKreamRenderedSummaryCandidates(html: string, detailUrl: string, identity: CardIdentity) {
