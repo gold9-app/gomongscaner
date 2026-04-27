@@ -913,6 +913,7 @@ async function collectKream(
     const html = await fetchHtml(url).catch(() => "");
     if (!html) continue;
 
+    const directDetailCandidates = await collectKreamDirectDetailCandidates(html, identity);
     const listCandidates = extractHtmlCards(html, "kream.co.kr", query, identity, "listing").map((candidate) => ({
       ...candidate,
       market: "KREAM",
@@ -929,7 +930,13 @@ async function collectKream(
     );
     const detailCandidates = await collectMarketDetailCandidates("KREAM", listCandidates, identity, "KRW");
     const searchDetailCandidates = await collectKreamSearchDetailCandidates(html, identity);
-    collected.push(...listCandidates, ...embeddedSearchCandidates, ...detailCandidates, ...searchDetailCandidates);
+    collected.push(
+      ...directDetailCandidates,
+      ...listCandidates,
+      ...embeddedSearchCandidates,
+      ...detailCandidates,
+      ...searchDetailCandidates
+    );
 
     const filtered = filterStructuredCandidates(dedupePriceCandidates(collected), identity);
     if (filtered.length >= 3 || filtered.some((candidate) => candidate.saleType === "sold")) {
@@ -938,6 +945,87 @@ async function collectKream(
   }
 
   return filterStructuredCandidates(dedupePriceCandidates(collected), identity).slice(0, 24);
+}
+
+async function collectKreamDirectDetailCandidates(searchHtml: string, identity: CardIdentity) {
+  const detailUrls = extractKreamSearchDetailUrls(searchHtml).slice(0, 3);
+  if (detailUrls.length === 0) return [];
+
+  const pages = await Promise.all(
+    detailUrls.map(async (detailUrl) => {
+      try {
+        const detailHtml = await fetchHtml(detailUrl);
+        return extractKreamDirectPayloadCandidates(detailHtml, detailUrl, identity);
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  return dedupePriceCandidates(pages.flat()).filter((candidate) => candidate.exactMatch).slice(0, 18);
+}
+
+function extractKreamDirectPayloadCandidates(html: string, detailUrl: string, identity: CardIdentity) {
+  if (!kreamDetailLikelyMatchesIdentity(html, identity)) return [];
+
+  const payload = extractNuxtDataPayload(html);
+  if (!payload) return [];
+
+  const candidates: PriceCandidate[] = [];
+  const targetTerms = detailConditionTerms(identity.targetCondition).map((term) => term.toLowerCase());
+
+  const salesPattern =
+    /\{"product_id":\d+,"product_option":\d+,"price":\d+,"is_immediate_delivery_item":\d+,"date_created":\d+,"date_created_display_text":\d+\},\{"product_id":\d+,"key":\d+,"name":\d+,"name_display":\d+,"id":\d+\},"([^"]+)",\d+,(\d{5,7}),"(20\d{2}-\d{2}-\d{2}T[^"]+)","([^"]+)"/g;
+  for (const match of payload.matchAll(salesPattern)) {
+    const optionLabel = cleanString(match[1]);
+    if (!matchesTargetOption(optionLabel, targetTerms)) continue;
+    const price = Number(match[2]);
+    if (!price) continue;
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market: "KREAM",
+        detailUrl,
+        defaultCurrency: "KRW",
+        price,
+        saleType: "sold",
+        title: `${identity.name} ${identity.number} ${optionLabel} 체결 거래 ${cleanString(match[4])}`.trim(),
+        matchScore: 100
+      })
+    );
+  }
+
+  const orderPattern =
+    /\{"product_id":\d+,"product_option":\d+,"price":\d+,"quantity":\d+,"is_immediate_delivery_item":\d+\},\{"product_id":\d+,"key":\d+,"name":\d+,"name_display":\d+,"id":\d+\},"([^"]+)",\d+,(\d{5,7})(?=,|})/g;
+  for (const match of payload.matchAll(orderPattern)) {
+    const optionLabel = cleanString(match[1]);
+    if (!matchesTargetOption(optionLabel, targetTerms)) continue;
+    const price = Number(match[2]);
+    if (!price) continue;
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market: "KREAM",
+        detailUrl,
+        defaultCurrency: "KRW",
+        price,
+        saleType: "listing",
+        title: `${identity.name} ${identity.number} ${optionLabel} 현재 매물`.trim(),
+        matchScore: 98
+      })
+    );
+  }
+
+  return dedupePriceCandidates(candidates);
+}
+
+function kreamDetailLikelyMatchesIdentity(html: string, identity: CardIdentity) {
+  const haystack = html.slice(0, 300000).toLowerCase();
+  const hasNumber =
+    identity.number === "Unknown" ||
+    numberVariants(identity.number.toLowerCase()).some((variant) => haystack.includes(variant));
+  const hasName = identityNameCandidates(identity).some((name) => cardNameMatchesTitle(haystack, name));
+  return hasNumber && hasName;
 }
 
 async function collectKreamSearchDetailCandidates(html: string, identity: CardIdentity) {
