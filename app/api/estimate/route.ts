@@ -407,7 +407,7 @@ async function collectMarketContext(identity: CardIdentity) {
   if (shouldPrioritizeKoreanMarkets(identity)) {
     const [snkrdunk, kream] = await Promise.all([
       withTimeout(collectSnkrdunkQuick(identity, searchPlan), 12000, "SNKRDUNK quick collector timed out").catch(() => []),
-      withTimeout(collectKreamQuick(identity, searchPlan), 12000, "KREAM quick collector timed out").catch(() => [])
+      withTimeout(collectKreamQuick(identity, searchPlan), 15000, "KREAM quick collector timed out").catch(() => [])
     ]);
 
     const direct = mergeStructuredCandidates(snkrdunk, kream);
@@ -1017,7 +1017,7 @@ async function collectKreamPrimaryDetailCandidates(query: string, identity: Card
   const searchHtml = await fetchHtml(url).catch(() => "");
   if (!searchHtml) return [];
 
-  const detailUrls = extractKreamSearchDetailUrls(searchHtml).slice(0, 5);
+  const detailUrls = extractKreamSearchDetailUrls(searchHtml).slice(0, 1);
   for (const detailUrl of detailUrls) {
     try {
       const detailHtml = await fetchHtml(detailUrl);
