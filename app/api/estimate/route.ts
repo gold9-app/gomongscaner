@@ -2175,19 +2175,19 @@ function normalizeEstimate(input: EstimateResponse, identity: CardIdentity, mark
 
   return {
     card: {
-      name: input.card?.name || identity.name,
-      language: input.card?.language || identity.language,
-      setName: input.card?.setName || identity.setName,
-      number: input.card?.number || identity.number,
-      rarity: input.card?.rarity || identity.rarity,
-      productLine: input.card?.productLine || identity.productLine,
-      year: input.card?.year || identity.year,
-      gradingCompany: input.card?.gradingCompany || identity.gradingCompany,
-      grade: input.card?.grade || identity.grade,
-      certNumber: input.card?.certNumber || identity.certNumber,
-      imageType: input.card?.imageType || identity.imageType,
-      targetCondition: input.card?.targetCondition || identity.targetCondition,
-      confidence: clamp(Number(input.card?.confidence) || identity.confidence, 0, 100)
+      name: identity.name,
+      language: identity.language,
+      setName: identity.setName,
+      number: identity.number,
+      rarity: identity.rarity,
+      productLine: identity.productLine || input.card?.productLine,
+      year: identity.year || input.card?.year,
+      gradingCompany: identity.gradingCompany || input.card?.gradingCompany,
+      grade: identity.grade || input.card?.grade,
+      certNumber: identity.certNumber || input.card?.certNumber,
+      imageType: identity.imageType || input.card?.imageType,
+      targetCondition: identity.targetCondition,
+      confidence: clamp(Math.max(Number(input.card?.confidence) || 0, identity.confidence), 0, 100)
     },
     price: {
       lowKrw: strictFailure ? 0 : normalizedPrice.lowKrw,
@@ -2961,11 +2961,28 @@ function applyStructuredInputConstraints(identity: CardIdentity, input: Estimate
         ? "psa9"
         : "psa10"
       : identity.targetCondition;
+  const numberHintsPromo = /\bSV-P\b/i.test(forcedNumber);
+  const queryHintsPromo = /\bpromo\b|프로모/i.test(`${input.query || ""} ${pokemonName || ""}`);
+  const forcedSetName =
+    numberHintsPromo || queryHintsPromo
+      ? forcedLanguage === "Korean"
+        ? "Korean Promo"
+        : forcedLanguage === "Japanese"
+          ? "Japanese Promo"
+          : "Promo"
+      : identity.setName;
+  const forcedRarity =
+    numberHintsPromo || queryHintsPromo
+      ? identity.rarity === "Unknown rarity" || /sar|ar|sr/i.test(identity.rarity)
+        ? "Promo"
+        : identity.rarity
+      : identity.rarity;
 
   const forcedSearchQueries = uniqueNonEmpty([
     ...identity.searchQueries,
     ...expandPokemonNameAliases(pokemonName),
     ...expandPokemonNameAliases(cleanString(input.query)),
+    joinSearchParts([forcedName, forcedNumber, forcedSetName, conditionSearchTerm(forcedTargetCondition)]),
     joinSearchParts([forcedName, forcedNumber, forcedLanguage, conditionSearchTerm(forcedTargetCondition)]),
     joinSearchParts([forcedName, forcedNumber, conditionSearchTerm(forcedTargetCondition)]),
     joinSearchParts([forcedNumber, forcedLanguage, conditionSearchTerm(forcedTargetCondition)]),
@@ -2982,6 +2999,8 @@ function applyStructuredInputConstraints(identity: CardIdentity, input: Estimate
     name: forcedName,
     number: forcedNumber,
     language: forcedLanguage,
+    setName: forcedSetName,
+    rarity: forcedRarity,
     grade: forcedGrade,
     gradingCompany: forcedGradingCompany,
     targetCondition: forcedTargetCondition,
