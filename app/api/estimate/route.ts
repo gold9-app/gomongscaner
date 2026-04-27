@@ -387,15 +387,21 @@ async function generateGeminiContent(parts: Array<Record<string, unknown>>) {
 
 async function collectMarketContext(identity: CardIdentity) {
   const searchPlan = buildMarketSearchPlan(identity);
-  const [perplexity, ebay, direct] = await Promise.all([
+  const [perplexity, ebayBrowse, ebaySold, ebayCurrent, priceCharting, snkrdunk, kream] = await Promise.all([
     withTimeout(searchMarketPrices(identity, searchPlan), 45000, "Perplexity search timed out").catch((error) => ({
       error: error instanceof Error ? error.message : "Perplexity search failed"
     })),
     searchEbayBrowse(identity, searchPlan),
-    withTimeout(collectDirectMarketPrices(identity, searchPlan), 45000, "Direct collectors timed out").catch(
+    withTimeout(collectEbayHtml(identity, searchPlan, "sold"), 45000, "eBay sold collector timed out").catch(() => []),
+    withTimeout(collectEbayHtml(identity, searchPlan, "current"), 45000, "eBay current collector timed out").catch(
       () => []
-    )
+    ),
+    withTimeout(collectPriceCharting(identity, searchPlan), 45000, "PriceCharting collector timed out").catch(() => []),
+    withTimeout(collectSnkrdunk(identity, searchPlan), 45000, "SNKRDUNK collector timed out").catch(() => []),
+    withTimeout(collectKream(identity, searchPlan), 45000, "KREAM collector timed out").catch(() => [])
   ]);
+
+  const direct = mergeStructuredCandidates(ebaySold, ebayCurrent, priceCharting, snkrdunk, kream);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -407,7 +413,13 @@ async function collectMarketContext(identity: CardIdentity) {
     },
     searchPlan,
     requiredSources: buildRequiredSourceTargets(identity, searchPlan),
-    structuredCandidates: mergeStructuredCandidates(direct, ebay),
+    sourceCoverage: {
+      eBay: { count: ebaySold.length + ebayCurrent.length + ebayBrowse.length, directCount: ebaySold.length + ebayCurrent.length },
+      PriceCharting: { count: priceCharting.length, directCount: priceCharting.length },
+      SNKRDUNK: { count: snkrdunk.length, directCount: snkrdunk.length },
+      KREAM: { count: kream.length, directCount: kream.length }
+    },
+    structuredCandidates: mergeStructuredCandidates(direct, ebayBrowse),
     directCandidates: direct,
     perplexity
   };
@@ -2082,7 +2094,8 @@ function normalizeEstimate(input: EstimateResponse, identity: CardIdentity, mark
   const markets = mergeMarketQuotes(collectorMarkets, aiMarkets).slice(0, 8);
   const exactCandidates = exactStructuredCandidates(marketContext, identity);
   const normalizedPrice = normalizePriceBand(input.price, markets, identity.targetCondition);
-  const strictFailure = shouldRejectPriceEstimate(identity, exactCandidates, normalizedPrice);
+  const strictFailure =
+    shouldRejectPriceEstimate(identity, exactCandidates, normalizedPrice) || !hasAllRequiredSourceCoverage(marketContext);
 
   const summaryPrefix =
     identity.validationWarnings && identity.validationWarnings.length > 0
@@ -2111,11 +2124,11 @@ function normalizeEstimate(input: EstimateResponse, identity: CardIdentity, mark
       medianKrw: strictFailure ? 0 : normalizedPrice.medianKrw,
       confidence: strictFailure || identity.confidence < 65 ? "low" : normalizedPrice.confidence,
       summary: strictFailure
-        ? `${summaryPrefix}정확히 일치하는 거래 근거가 부족해 가격을 숨깁니다. 카드명, 번호, 언어, 세트, 상태를 더 구체적으로 확인해 주세요.`
+        ? `${summaryPrefix}필수 시세 소스 수집이 아직 충분하지 않아 가격을 숨깁니다. KREAM, SNKRDUNK, eBay, PriceCharting 기준 데이터가 모두 확인될 때만 시세를 노출합니다.`
         : `${summaryPrefix}${input.price?.summary || "가격 후보가 충분하지 않아 보수적으로 추정했습니다."}`
     },
     markets: strictFailure ? markets.slice(0, 4) : markets,
-    sources: ensureRequiredSources(Array.isArray(input.sources) ? input.sources.slice(0, 8) : [], identity),
+    sources: ensureRequiredSources(Array.isArray(input.sources) ? input.sources.slice(0, 8) : [], identity, marketContext),
     usedMock: false
   };
 }
@@ -2725,15 +2738,20 @@ function uniqueNonEmpty(values: string[]) {
 
 function ensureRequiredSources(
   sources: EstimateResponse["sources"],
-  identity: CardIdentity
+  identity: CardIdentity,
+  marketContext?: unknown
 ): EstimateResponse["sources"] {
+  const coverage = sourceCoverageMap(marketContext);
   const existing = new Set<string>(sources.map((source) => guessMarket(source.url)));
   const required = buildRequiredSourceTargets(identity)
     .filter((source) => !existing.has(source.market))
     .map((source) => ({
       title: `${source.market} ${buildSourceQuery(identity)}`,
       url: source.url,
-      note: "search/reference - price not visible"
+      note:
+        coverage[source.market]?.count > 0
+          ? `required source collected - ${coverage[source.market]?.count} candidates found`
+          : "required source missing - no structured candidates collected"
     }));
 
   const merged = [...sources, ...required];
@@ -2747,6 +2765,17 @@ function ensureRequiredSources(
       return true;
     })
     .slice(0, 10);
+}
+
+function sourceCoverageMap(marketContext?: unknown) {
+  const coverage = (marketContext as { sourceCoverage?: Record<string, { count: number; directCount: number }> } | undefined)
+    ?.sourceCoverage;
+  return coverage || {};
+}
+
+function hasAllRequiredSourceCoverage(marketContext?: unknown) {
+  const coverage = sourceCoverageMap(marketContext);
+  return ["KREAM", "SNKRDUNK", "eBay", "PriceCharting"].every((market) => (coverage[market]?.count || 0) > 0);
 }
 
 function mockEstimate(input: EstimateRequest): EstimateResponse {
@@ -2934,7 +2963,8 @@ function fallbackEstimate(
         url: candidate.url,
         note: `${candidate.market} ${candidate.saleType}`
       })),
-      identity
+      identity,
+      marketContext
     ),
     usedMock: false
   };
