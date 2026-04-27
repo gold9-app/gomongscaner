@@ -200,11 +200,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(mockEstimate(body));
     }
 
-    const identifiedIdentity = await withTimeout(
-      identifyCard(body),
-      30000,
-      "Gemini identification timed out"
-    ).catch(() => fallbackIdentity(body));
+    const identifiedIdentity = hasStrongStructuredIdentityInput(body)
+      ? fallbackIdentity(body)
+      : await withTimeout(
+          identifyCard(body),
+          30000,
+          "Gemini identification timed out"
+        ).catch(() => fallbackIdentity(body));
     const identity = applyStructuredInputConstraints(identifiedIdentity, body);
     const marketContext = await collectMarketContext(identity);
     const estimate = await withTimeout(
@@ -222,6 +224,14 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+function hasStrongStructuredIdentityInput(input: EstimateRequest) {
+  const hasName = Boolean(cleanString(input.pokemonName));
+  const hasNumber = Boolean(normalizeCardNumber(cleanString(input.cardNumber)));
+  const hasLanguage = Boolean(cleanString(input.language));
+  const hasGrade = input.cardType !== "psa" || Boolean(cleanString(input.grade));
+  return input.mode === "text" && hasName && hasNumber && hasLanguage && hasGrade;
 }
 
 async function identifyCard(input: EstimateRequest): Promise<CardIdentity> {
