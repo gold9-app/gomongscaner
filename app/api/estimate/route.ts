@@ -3196,6 +3196,8 @@ function shouldRejectPriceEstimate(
 }
 
 function candidateSupportsIdentity(candidate: PriceCandidate, identity: CardIdentity) {
+  if (isTrustedStructuredDetailCandidate(candidate, identity)) return true;
+
   const haystack = `${candidate.title} ${candidate.url}`.toLowerCase();
   if (!contextMatchesIdentity(candidate.title, candidate.url, identity)) return false;
 
@@ -3205,6 +3207,33 @@ function candidateSupportsIdentity(candidate: PriceCandidate, identity: CardIden
   }
 
   return true;
+}
+
+function isTrustedStructuredDetailCandidate(candidate: PriceCandidate, identity: CardIdentity) {
+  if (!candidate.exactMatch || candidate.numberMatch === false || candidate.conditionMatch === false) {
+    return false;
+  }
+
+  const market = candidate.market.toLowerCase();
+  const isTrustedMarket = market === "kream" || market === "snkrdunk";
+  const isDetailUrl =
+    /kream\.co\.kr\/products\/\d+/i.test(candidate.url) ||
+    /snkrdunk\.com\/en\/[^?\s]+/i.test(candidate.url);
+
+  if (!isTrustedMarket || !isDetailUrl) return false;
+
+  const haystack = `${candidate.title} ${candidate.url}`.toLowerCase();
+  const hasNumber =
+    identity.number === "Unknown" ||
+    numberVariants(identity.number.toLowerCase()).some((variant) => haystack.includes(variant));
+  const hasName = identityNameCandidates(identity).some((name) => cardNameMatchesTitle(haystack, name));
+  const hasCondition =
+    identity.targetCondition === "raw" ||
+    detailConditionTerms(identity.targetCondition).some((term) =>
+      haystack.includes(term.toLowerCase()) || haystack.replace(/\s+/g, "").includes(term.toLowerCase().replace(/\s+/g, ""))
+    );
+
+  return hasNumber && hasName && hasCondition;
 }
 
 function setSignalsForIdentity(identity: CardIdentity) {
