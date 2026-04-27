@@ -781,12 +781,21 @@ async function collectSnkrdunk(
   const query = searchPlan.marketQueries.snkrdunk[0] || buildSourceQuery(identity);
   const url = `https://snkrdunk.com/en/search/result?keyword=${encodeURIComponent(query)}`;
   const html = await fetchHtml(url);
-  return extractHtmlCards(html, "snkrdunk.com", query, identity, "listing").map((candidate) => ({
+  const listCandidates = extractHtmlCards(html, "snkrdunk.com", query, identity, "listing").map((candidate) => ({
     ...candidate,
     market: "SNKRDUNK",
     currency: candidate.currency || "JPY",
     approximateKrw: convertToKrw(candidate.price, candidate.currency || "JPY")
   }));
+
+  const detailCandidates = await collectMarketDetailCandidates(
+    "SNKRDUNK",
+    listCandidates,
+    identity,
+    "JPY"
+  );
+
+  return filterStructuredCandidates([...listCandidates, ...detailCandidates], identity).slice(0, 18);
 }
 
 async function collectKream(
@@ -796,12 +805,274 @@ async function collectKream(
   const query = searchPlan.marketQueries.kream[0] || buildSourceQuery(identity);
   const url = `https://kream.co.kr/search?keyword=${encodeURIComponent(query)}`;
   const html = await fetchHtml(url);
-  return extractHtmlCards(html, "kream.co.kr", query, identity, "listing").map((candidate) => ({
+  const listCandidates = extractHtmlCards(html, "kream.co.kr", query, identity, "listing").map((candidate) => ({
     ...candidate,
     market: "KREAM",
     currency: candidate.currency || "KRW",
     approximateKrw: convertToKrw(candidate.price, candidate.currency || "KRW")
   }));
+
+  const detailCandidates = await collectMarketDetailCandidates("KREAM", listCandidates, identity, "KRW");
+
+  return filterStructuredCandidates([...listCandidates, ...detailCandidates], identity).slice(0, 18);
+}
+
+async function collectMarketDetailCandidates(
+  market: "KREAM" | "SNKRDUNK",
+  baseCandidates: PriceCandidate[],
+  identity: CardIdentity,
+  defaultCurrency: "KRW" | "JPY"
+) {
+  const detailUrls = uniqueNonEmpty(
+    baseCandidates
+      .filter((candidate) => candidateSupportsIdentity(candidate, identity))
+      .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0))
+      .map((candidate) => candidate.url)
+  ).slice(0, 3);
+
+  const pages = await Promise.all(
+    detailUrls.map(async (detailUrl) => {
+      try {
+        const html = await fetchHtml(detailUrl);
+        return extractMarketDetailCandidates(html, detailUrl, market, identity, defaultCurrency);
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  return filterStructuredCandidates(pages.flat(), identity).slice(0, 12);
+}
+
+function extractMarketDetailCandidates(
+  html: string,
+  detailUrl: string,
+  market: "KREAM" | "SNKRDUNK",
+  identity: CardIdentity,
+  defaultCurrency: "KRW" | "JPY"
+) {
+  const normalizedHtml = decodeHtml(html);
+  const text = decodeHtml(stripTags(html)).replace(/\s+/g, " ").trim();
+  const windows = buildDetailWindows(normalizedHtml, text, identity, market);
+  const candidates: PriceCandidate[] = [];
+
+  for (const windowText of windows) {
+    candidates.push(
+      ...extractDetailPriceRows(windowText, detailUrl, market, identity, defaultCurrency),
+      ...extractDetailActionPrices(windowText, detailUrl, market, identity, defaultCurrency)
+    );
+  }
+
+  return dedupePriceCandidates(candidates)
+    .filter((candidate) => candidateSupportsIdentity(candidate, identity))
+    .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
+}
+
+function buildDetailWindows(
+  normalizedHtml: string,
+  text: string,
+  identity: CardIdentity,
+  market: "KREAM" | "SNKRDUNK"
+) {
+  const windows = [text];
+  const conditionTerms = detailConditionTerms(identity.targetCondition);
+  const markerTerms =
+    market === "KREAM"
+      ? [...conditionTerms, "체결 거래", "거래 및 입찰 내역", "즉시 구매가", "즉시 판매가", "판매 입찰", "구매 입찰"]
+      : [...conditionTerms, "latest sales", "trading history", "buy now", "sell now", "market price", "price history"];
+
+  for (const marker of markerTerms) {
+    const escaped = escapeRegExp(marker);
+    const regex = new RegExp(`.{0,1400}${escaped}.{0,2200}`, "gi");
+    for (const match of normalizedHtml.matchAll(regex)) {
+      const snippet = decodeHtml(stripTags(match[0])).replace(/\s+/g, " ").trim();
+      if (snippet) windows.push(snippet);
+    }
+    for (const match of text.matchAll(regex)) {
+      const snippet = cleanString(match[0]);
+      if (snippet) windows.push(snippet);
+    }
+  }
+
+  return uniqueNonEmpty(windows).slice(0, 12);
+}
+
+function extractDetailPriceRows(
+  text: string,
+  detailUrl: string,
+  market: "KREAM" | "SNKRDUNK",
+  identity: CardIdentity,
+  defaultCurrency: "KRW" | "JPY"
+) {
+  const candidates: PriceCandidate[] = [];
+  const conditionTerms = detailConditionTerms(identity.targetCondition);
+  const currencyPattern = defaultCurrency === "KRW" ? "(\\d{1,3}(?:,\\d{3})+)\\s*원" : "¥\\s*(\\d{1,3}(?:,\\d{3})+)";
+  const soldKeywords = market === "KREAM" ? "(?:체결 거래|체결|거래)" : "(?:sold|sale|latest sale|transaction)";
+  const recencyPattern =
+    market === "KREAM"
+      ? "(\\d+\\s*(?:시간|일|주|개월)\\s*전|20\\d{2}[./-]\\d{2}[./-]\\d{2})"
+      : "(\\d+\\s*(?:hours?|days?|weeks?|months?)\\s*ago|20\\d{2}[./-]\\d{2}[./-]\\d{2})";
+
+  for (const term of conditionTerms) {
+    const pattern = new RegExp(
+      `${escapeRegExp(term)}[\\s\\S]{0,120}?${currencyPattern}[\\s\\S]{0,80}?${recencyPattern}?`,
+      "gi"
+    );
+    for (const match of text.matchAll(pattern)) {
+      const rawPrice = match[1];
+      const rawRecency = match[2] || "";
+      const price = Number(rawPrice.replace(/,/g, ""));
+      if (!price) continue;
+
+      candidates.push(
+        makeDetailCandidate({
+          identity,
+          market,
+          detailUrl,
+          defaultCurrency,
+          price,
+          saleType: "sold",
+          title: `${identity.name} ${identity.number} ${term} ${soldKeywordsToLabel(market)} ${rawRecency}`.trim(),
+          matchScore: 99
+        })
+      );
+    }
+  }
+
+  const genericRowPattern = new RegExp(
+    `${currencyPattern}[\\s\\S]{0,80}?${recencyPattern}`,
+    "gi"
+  );
+
+  for (const match of text.matchAll(genericRowPattern)) {
+    const price = Number((match[1] || "").replace(/,/g, ""));
+    const recency = cleanString(match[2] || "");
+    const rowText = surroundingText(text, match.index || 0);
+    if (!price || !conditionTerms.some((term) => rowText.toLowerCase().includes(term.toLowerCase()))) continue;
+    if (!new RegExp(soldKeywords, "i").test(rowText) && market !== "KREAM") continue;
+
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market,
+        detailUrl,
+        defaultCurrency,
+        price,
+        saleType: "sold",
+        title: `${identity.name} ${identity.number} ${conditionTerms[0]} trade ${recency}`.trim(),
+        matchScore: 97
+      })
+    );
+  }
+
+  return candidates;
+}
+
+function extractDetailActionPrices(
+  text: string,
+  detailUrl: string,
+  market: "KREAM" | "SNKRDUNK",
+  identity: CardIdentity,
+  defaultCurrency: "KRW" | "JPY"
+) {
+  const candidates: PriceCandidate[] = [];
+  const currencyPattern = defaultCurrency === "KRW" ? "(\\d{1,3}(?:,\\d{3})+)\\s*원" : "¥\\s*(\\d{1,3}(?:,\\d{3})+)";
+  const actionLabels =
+    market === "KREAM"
+      ? [
+          { label: "즉시 구매가", saleType: "listing" as const },
+          { label: "즉시 판매가", saleType: "listing" as const },
+          { label: "구매 입찰", saleType: "listing" as const },
+          { label: "판매 입찰", saleType: "listing" as const }
+        ]
+      : [
+          { label: "buy now", saleType: "listing" as const },
+          { label: "sell now", saleType: "listing" as const },
+          { label: "lowest ask", saleType: "listing" as const },
+          { label: "highest bid", saleType: "listing" as const },
+          { label: "market price", saleType: "listing" as const }
+        ];
+
+  for (const action of actionLabels) {
+    const pattern = new RegExp(`${escapeRegExp(action.label)}[\\s\\S]{0,60}?${currencyPattern}`, "i");
+    const match = text.match(pattern);
+    if (!match) continue;
+    const price = Number(match[1].replace(/,/g, ""));
+    if (!price) continue;
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market,
+        detailUrl,
+        defaultCurrency,
+        price,
+        saleType: action.saleType,
+        title: `${identity.name} ${identity.number} ${conditionSearchTerm(identity.targetCondition)} ${action.label}`,
+        matchScore: 98
+      })
+    );
+  }
+
+  return candidates;
+}
+
+function makeDetailCandidate(args: {
+  identity: CardIdentity;
+  market: "KREAM" | "SNKRDUNK";
+  detailUrl: string;
+  defaultCurrency: "KRW" | "JPY";
+  price: number;
+  saleType: "sold" | "listing";
+  title: string;
+  matchScore: number;
+}): PriceCandidate {
+  const { identity, market, detailUrl, defaultCurrency, price, saleType, title, matchScore } = args;
+  return {
+    title,
+    market,
+    url: detailUrl,
+    price,
+    currency: defaultCurrency,
+    approximateKrw: convertToKrw(price, defaultCurrency),
+    saleType,
+    condition: normalizeCandidateCondition(title, identity, saleType),
+    language: identity.language,
+    exactMatch: true,
+    excludeReason: "",
+    marketSearchQuery: identity.searchQueries[0],
+    matchScore,
+    numberMatch: true,
+    conditionMatch: true
+  };
+}
+
+function detailConditionTerms(targetCondition: string) {
+  if (targetCondition === "psa10") return ["PSA 10", "PSA10"];
+  if (targetCondition === "psa9") return ["PSA 9", "PSA9"];
+  if (targetCondition === "bgs10") return ["BGS 10", "BGS10"];
+  if (targetCondition === "cgc10") return ["CGC 10", "CGC10"];
+  return ["raw", "single", "ungraded"];
+}
+
+function soldKeywordsToLabel(market: "KREAM" | "SNKRDUNK") {
+  return market === "KREAM" ? "체결 거래" : "latest sale";
+}
+
+function dedupePriceCandidates(candidates: PriceCandidate[]) {
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const key = [
+      candidate.market,
+      candidate.url,
+      candidate.saleType,
+      candidate.currency,
+      candidate.price,
+      candidate.title
+    ].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function fetchHtml(url: string) {
@@ -1034,6 +1305,7 @@ function filterStructuredCandidates(candidates: PriceCandidate[], identity: Card
   return candidates
     .filter((candidate) => candidate.approximateKrw > 0)
     .filter((candidate) => candidate.numberMatch !== false)
+    .filter((candidate) => candidateSupportsIdentity(candidate, identity))
     .filter((candidate) => {
       const strict = isStandardTcgWithNumber(identity);
       if (!strict) return true;
