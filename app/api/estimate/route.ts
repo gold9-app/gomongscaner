@@ -514,6 +514,7 @@ async function searchMarketPrices(identity: CardIdentity, searchPlan: MarketSear
     "1. Sold/completed exact-match listings for the requested condition from the last 90 days.",
     "2. Current exact-match listings for the requested condition from major markets.",
     "3. Other conditions only as separate references, never for the main price range.",
+    "4. For Korean PSA/promo cards, recent KREAM and SNKRDUNK option-level prices outweigh broad international references when they clearly match the exact card and condition.",
     "",
     "SOURCES TO CHECK:",
     "- eBay sold/current listings. Use the eBay sold queries below for sold/completed research.",
@@ -522,6 +523,7 @@ async function searchMarketPrices(identity: CardIdentity, searchPlan: MarketSear
     "- Korean marketplace pages only when the exact card number and version are visible",
     "- For Korean promo or Korean PSA cards, prioritize KREAM and SNKRDUNK transaction history, current ask, and current bid if visible.",
     "- If KREAM or SNKRDUNK show option-level PSA 10 transaction rows, include those exact rows as separate candidates.",
+    "- When KREAM or SNKRDUNK shows option-level PSA 10 prices, return those rows even if other global sold data exists.",
     "",
     "MARKET QUERY STRATEGY:",
     "- Do not use one long query for every market.",
@@ -530,6 +532,7 @@ async function searchMarketPrices(identity: CardIdentity, searchPlan: MarketSear
     "- For graded standard TCG cards with a known number, start from exact set-aware queries such as '<english name> <rarity> <number> <set code> PSA 10' or '<english name> <rarity> <number> <set name> PSA 10' before broader number-only queries.",
     "- For each candidate, include marketSearchQuery and matchScore from 0-100.",
     "- Set numberMatch and conditionMatch booleans.",
+    "- For Korean PSA/promo cards, try hard to return at least 2 KREAM or SNKRDUNK candidates when visible.",
     "",
     "Return compact JSON inside your answer with this exact shape:",
     JSON.stringify({
@@ -3620,10 +3623,12 @@ function extractPerplexityStructuredCandidates(perplexity: unknown, identity: Ca
         candidate?.saleType === "sold" || candidate?.saleType === "listing" ? candidate.saleType : "listing";
       const condition = cleanString(candidate?.condition) || normalizeCandidateCondition(title, identity, saleType);
       const language = cleanString(candidate?.language) || identity.language;
-      const exactMatch = Boolean(candidate?.exactMatch);
-      const matchScore = Number(candidate?.matchScore) || 0;
-      const numberMatch = candidate?.numberMatch !== false;
-      const conditionMatch = candidate?.conditionMatch !== false;
+      const inferredNumberMatch = identity.number === "Unknown" || numberVariants(identity.number.toLowerCase()).some((variant) => `${title} ${url}`.toLowerCase().includes(variant));
+      const inferredConditionMatch = conditionMatchesTarget(condition.toLowerCase(), identity.targetCondition);
+      const exactMatch = Boolean(candidate?.exactMatch) || contextMatchesIdentity(title, url, identity);
+      const matchScore = Math.max(Number(candidate?.matchScore) || 0, exactMatch ? 90 : 0);
+      const numberMatch = candidate?.numberMatch !== false && inferredNumberMatch;
+      const conditionMatch = candidate?.conditionMatch !== false && inferredConditionMatch;
       const market = cleanString(candidate?.market) || guessMarket(url);
 
       return {
