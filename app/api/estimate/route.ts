@@ -387,11 +387,14 @@ async function generateGeminiContent(parts: Array<Record<string, unknown>>) {
 
 async function collectMarketContext(identity: CardIdentity) {
   const searchPlan = buildMarketSearchPlan(identity);
-  const [perplexity, ebay] = await Promise.all([
+  const [perplexity, ebay, direct] = await Promise.all([
     withTimeout(searchMarketPrices(identity, searchPlan), 45000, "Perplexity search timed out").catch((error) => ({
       error: error instanceof Error ? error.message : "Perplexity search failed"
     })),
-    searchEbayBrowse(identity, searchPlan)
+    searchEbayBrowse(identity, searchPlan),
+    withTimeout(collectDirectMarketPrices(identity, searchPlan), 45000, "Direct collectors timed out").catch(
+      () => []
+    )
   ]);
 
   return {
@@ -404,7 +407,8 @@ async function collectMarketContext(identity: CardIdentity) {
     },
     searchPlan,
     requiredSources: buildRequiredSourceTargets(identity, searchPlan),
-    structuredCandidates: ebay,
+    structuredCandidates: mergeStructuredCandidates(direct, ebay),
+    directCandidates: direct,
     perplexity
   };
 }
@@ -622,7 +626,7 @@ async function summarizePrice(
   const text = payload.content?.find((item: { type: string }) => item.type === "text")?.text;
   try {
     const parsed = parseJsonObject(text) as EstimateResponse;
-    return normalizeEstimate(parsed, identity);
+    return normalizeEstimate(parsed, identity, marketContext);
   } catch (error) {
     return fallbackEstimate(identity, marketContext, error);
   }
@@ -712,6 +716,353 @@ async function searchEbayBrowse(
       conditionMatch: classification.conditionMatch
     };
   });
+}
+
+async function collectDirectMarketPrices(
+  identity: CardIdentity,
+  searchPlan: MarketSearchPlan
+): Promise<PriceCandidate[]> {
+  const [ebaySold, ebayCurrent, priceCharting, snkrdunk, kream] = await Promise.all([
+    collectEbayHtml(identity, searchPlan, "sold").catch(() => []),
+    collectEbayHtml(identity, searchPlan, "current").catch(() => []),
+    collectPriceCharting(identity, searchPlan).catch(() => []),
+    collectSnkrdunk(identity, searchPlan).catch(() => []),
+    collectKream(identity, searchPlan).catch(() => [])
+  ]);
+
+  return mergeStructuredCandidates(ebaySold, ebayCurrent, priceCharting, snkrdunk, kream);
+}
+
+async function collectEbayHtml(
+  identity: CardIdentity,
+  searchPlan: MarketSearchPlan,
+  mode: "sold" | "current"
+): Promise<PriceCandidate[]> {
+  const query =
+    mode === "sold"
+      ? searchPlan.marketQueries.ebaySold[0] || buildEbayQuery(identity, searchPlan)
+      : searchPlan.marketQueries.ebayCurrent[0] || buildEbayQuery(identity, searchPlan);
+  const url = new URL("https://www.ebay.com/sch/i.html");
+  url.searchParams.set("_nkw", query);
+  if (mode === "sold") {
+    url.searchParams.set("LH_Sold", "1");
+    url.searchParams.set("LH_Complete", "1");
+  }
+
+  const html = await fetchHtml(url.toString());
+  const cards = extractHtmlCards(html, "ebay.com", query, identity, mode === "sold" ? "sold" : "listing");
+  return cards.map((candidate) => ({
+    ...candidate,
+    market: "eBay"
+  }));
+}
+
+async function collectPriceCharting(
+  identity: CardIdentity,
+  searchPlan: MarketSearchPlan
+): Promise<PriceCandidate[]> {
+  const query = searchPlan.marketQueries.pricecharting[0] || buildSourceQuery(identity);
+  const searchUrl = `https://www.pricecharting.com/search-products?q=${encodeURIComponent(query)}&type=prices`;
+  const searchHtml = await fetchHtml(searchUrl);
+  const detailUrl = extractPriceChartingDetailUrl(searchHtml, identity);
+  if (!detailUrl) return [];
+
+  const detailHtml = await fetchHtml(detailUrl);
+  return [
+    ...extractPriceChartingGuideCandidates(detailHtml, detailUrl, identity),
+    ...extractPriceChartingRecentSales(detailHtml, detailUrl, identity)
+  ];
+}
+
+async function collectSnkrdunk(
+  identity: CardIdentity,
+  searchPlan: MarketSearchPlan
+): Promise<PriceCandidate[]> {
+  const query = searchPlan.marketQueries.snkrdunk[0] || buildSourceQuery(identity);
+  const url = `https://snkrdunk.com/en/search/result?keyword=${encodeURIComponent(query)}`;
+  const html = await fetchHtml(url);
+  return extractHtmlCards(html, "snkrdunk.com", query, identity, "listing").map((candidate) => ({
+    ...candidate,
+    market: "SNKRDUNK",
+    currency: candidate.currency || "JPY",
+    approximateKrw: convertToKrw(candidate.price, candidate.currency || "JPY")
+  }));
+}
+
+async function collectKream(
+  identity: CardIdentity,
+  searchPlan: MarketSearchPlan
+): Promise<PriceCandidate[]> {
+  const query = searchPlan.marketQueries.kream[0] || buildSourceQuery(identity);
+  const url = `https://kream.co.kr/search?keyword=${encodeURIComponent(query)}`;
+  const html = await fetchHtml(url);
+  return extractHtmlCards(html, "kream.co.kr", query, identity, "listing").map((candidate) => ({
+    ...candidate,
+    market: "KREAM",
+    currency: candidate.currency || "KRW",
+    approximateKrw: convertToKrw(candidate.price, candidate.currency || "KRW")
+  }));
+}
+
+async function fetchHtml(url: string) {
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9,ko-KR;q=0.8,ja;q=0.7"
+    },
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTML fetch failed: ${response.status} ${url}`);
+  }
+
+  return response.text();
+}
+
+function extractHtmlCards(
+  html: string,
+  hostHint: string,
+  query: string,
+  identity: CardIdentity,
+  saleType: PriceCandidate["saleType"]
+): PriceCandidate[] {
+  const snippets = html
+    .split(/(?=<a\b)|(?=<li\b)|(?=<article\b)|(?=<div\b)/i)
+    .filter((chunk) => /[$¥₩]|\bKRW\b|\bJPY\b|\bUSD\b|원/.test(chunk))
+    .slice(0, 300);
+
+  const candidates: PriceCandidate[] = [];
+  for (const snippet of snippets) {
+    const title = decodeHtml(cleanString(stripTags(snippet))).slice(0, 240);
+    const url = extractFirstUrl(snippet, hostHint);
+    const priceHit = extractFirstPrice(snippet);
+    if (!title || !url || !priceHit) continue;
+
+    const classification = classifyCandidate(title, identity);
+    candidates.push({
+      title,
+      market: hostHint.includes("ebay") ? "eBay" : hostHint.includes("kream") ? "KREAM" : "SNKRDUNK",
+      url,
+      price: priceHit.value,
+      currency: priceHit.currency,
+      approximateKrw: convertToKrw(priceHit.value, priceHit.currency),
+      saleType,
+      condition: normalizeCandidateCondition(title, identity, saleType),
+      language: identity.language,
+      exactMatch: classification.exactMatch,
+      excludeReason: classification.excludeReason,
+      marketSearchQuery: query,
+      matchScore: classification.matchScore,
+      numberMatch: classification.numberMatch,
+      conditionMatch: classification.conditionMatch
+    });
+  }
+
+  return filterStructuredCandidates(candidates, identity).slice(0, 12);
+}
+
+function extractPriceChartingDetailUrl(html: string, identity: CardIdentity) {
+  const links = [...html.matchAll(/href="(\/game\/[^"]+)"/g)].map((match) => match[1]);
+  const best = links.find((link) => contextMatchesIdentity(link, link, identity)) || links[0];
+  return best ? `https://www.pricecharting.com${best}` : "";
+}
+
+function extractPriceChartingGuideCandidates(
+  html: string,
+  detailUrl: string,
+  identity: CardIdentity
+): PriceCandidate[] {
+  const candidates: PriceCandidate[] = [];
+  const guideSection = html.match(/Full Price Guide:[\s\S]+?(?:All prices are the current market price|Chart shows the price)/i)?.[0] || "";
+  if (!guideSection) return candidates;
+
+  const targetLabels = priceChartingTargetLabels(identity.targetCondition);
+  for (const label of targetLabels) {
+    const pattern = new RegExp(`${escapeRegExp(label)}\\s*\\|\\s*\\$([\\d,]+(?:\\.\\d{1,2})?)`, "i");
+    const match = guideSection.match(pattern);
+    if (!match) continue;
+    const value = Number(match[1].replace(/,/g, ""));
+    if (!value) continue;
+    candidates.push({
+      title: `${identity.name} ${label} market value`,
+      market: "PriceCharting",
+      url: detailUrl,
+      price: value,
+      currency: "USD",
+      approximateKrw: convertToKrw(value, "USD"),
+      saleType: "unknown",
+      condition: normalizePriceChartingCondition(label),
+      language: identity.language,
+      exactMatch: true,
+      excludeReason: "",
+      marketSearchQuery: identity.searchQueries[0],
+      matchScore: 96,
+      numberMatch: true,
+      conditionMatch: conditionMatchesTarget(normalizePriceChartingCondition(label).toLowerCase(), identity.targetCondition)
+    });
+  }
+
+  return candidates;
+}
+
+function extractPriceChartingRecentSales(
+  html: string,
+  detailUrl: string,
+  identity: CardIdentity
+): PriceCandidate[] {
+  const conditionLabels = priceChartingTargetLabels(identity.targetCondition);
+  const segments = conditionLabels
+    .map((label) => html.match(new RegExp(`${escapeRegExp(label)} Sold Listings \\(\\d+\\)([\\s\\S]{0,2400})`, "i"))?.[1] || "")
+    .filter(Boolean);
+
+  const candidates: PriceCandidate[] = [];
+  for (const segment of segments) {
+    const rowMatches = [...segment.matchAll(/(20\d{2}-\d{2}-\d{2})[\s\S]{0,300}?\|\s*\$([\d,]+(?:\.\d{1,2})?)/g)];
+    for (const row of rowMatches.slice(0, 8)) {
+      const saleDate = row[1];
+      const value = Number(row[2].replace(/,/g, ""));
+      const nearby = segment.slice(Math.max(0, row.index || 0), Math.min(segment.length, (row.index || 0) + 260));
+      const titleMatch = nearby.match(/\|\s*([^|]+?)\s*\|\s*\$[\d,]+(?:\.\d{1,2})?/);
+      const title = cleanString(titleMatch?.[1]) || `${identity.name} PriceCharting sold`;
+      if (!value) continue;
+      candidates.push({
+        title,
+        market: "PriceCharting",
+        url: detailUrl,
+        price: value,
+        currency: "USD",
+        approximateKrw: convertToKrw(value, "USD"),
+        saleType: "sold",
+        condition: normalizeCandidateCondition(title, identity, "sold"),
+        language: identity.language,
+        exactMatch: true,
+        excludeReason: "",
+        marketSearchQuery: identity.searchQueries[0],
+        matchScore: 98,
+        numberMatch: true,
+        conditionMatch: true
+      });
+    }
+  }
+
+  return filterStructuredCandidates(candidates, identity).slice(0, 10);
+}
+
+function priceChartingTargetLabels(targetCondition: string) {
+  if (targetCondition === "psa10") return ["PSA 10"];
+  if (targetCondition === "psa9") return ["Grade 9", "PSA 9"];
+  if (targetCondition === "raw") return ["Ungraded"];
+  if (targetCondition === "bgs10") return ["BGS 10"];
+  if (targetCondition === "cgc10") return ["CGC 10"];
+  return ["Ungraded"];
+}
+
+function normalizePriceChartingCondition(label: string) {
+  const normalized = label.toLowerCase();
+  if (normalized.includes("psa 10")) return "PSA 10 reference";
+  if (normalized.includes("psa 9") || normalized.includes("grade 9")) return "PSA 9 reference";
+  if (normalized.includes("bgs 10")) return "BGS 10 reference";
+  if (normalized.includes("cgc 10")) return "CGC 10 reference";
+  if (normalized.includes("ungraded")) return "Raw reference";
+  return `${label} reference`;
+}
+
+function normalizeCandidateCondition(
+  title: string,
+  identity: CardIdentity,
+  saleType: PriceCandidate["saleType"]
+) {
+  const lower = title.toLowerCase();
+  if (/\bpsa\s*10\b/.test(lower)) return saleType === "sold" ? "PSA 10 sold" : "PSA 10 listing";
+  if (/\bpsa\s*9\b/.test(lower)) return saleType === "sold" ? "PSA 9 sold" : "PSA 9 listing";
+  if (/\bcgc\s*10\b/.test(lower)) return saleType === "sold" ? "CGC 10 sold" : "CGC 10 listing";
+  if (/\bbgs\s*10\b/.test(lower)) return saleType === "sold" ? "BGS 10 sold" : "BGS 10 listing";
+  if (/lp|lightly played/.test(lower)) return saleType === "sold" ? "Raw LP sold" : "Raw LP listing";
+  if (/nm|near mint|mint|art rare|illustration rare|holo/.test(lower) || identity.targetCondition === "raw") {
+    return saleType === "sold" ? "Raw sold" : "Raw listing";
+  }
+  return saleType === "sold" ? `${identity.targetCondition} sold` : `${identity.targetCondition} listing`;
+}
+
+function extractFirstUrl(snippet: string, hostHint: string) {
+  const absolute = snippet.match(/https?:\/\/[^"'\\\s>]+/i)?.[0];
+  if (absolute) return decodeHtml(absolute);
+  const relative = snippet.match(/href="([^"]+)"/i)?.[1];
+  if (!relative) return "";
+  if (relative.startsWith("http")) return decodeHtml(relative);
+  return `https://${hostHint}${relative.startsWith("/") ? relative : `/${relative}`}`;
+}
+
+function extractFirstPrice(snippet: string) {
+  const pricePatterns: Array<{ regex: RegExp; currency: string }> = [
+    { regex: /\$\s*([\d,]+(?:\.\d{1,2})?)/, currency: "USD" },
+    { regex: /¥\s*([\d,]+(?:\.\d{1,2})?)/, currency: "JPY" },
+    { regex: /₩\s*([\d,]+(?:\.\d{1,2})?)/, currency: "KRW" },
+    { regex: /([\d,]{3,})\s*원/, currency: "KRW" }
+  ];
+
+  for (const pattern of pricePatterns) {
+    const match = snippet.match(pattern.regex);
+    if (!match) continue;
+    const value = Number(match[1].replace(/,/g, ""));
+    if (!Number.isFinite(value) || value <= 0) continue;
+    return { value, currency: pattern.currency };
+  }
+
+  return null;
+}
+
+function stripTags(value: string) {
+  return value.replace(/<[^>]+>/g, " ");
+}
+
+function decodeHtml(value: string) {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function filterStructuredCandidates(candidates: PriceCandidate[], identity: CardIdentity) {
+  return candidates
+    .filter((candidate) => candidate.approximateKrw > 0)
+    .filter((candidate) => candidate.numberMatch !== false)
+    .filter((candidate) => {
+      const strict = isStandardTcgWithNumber(identity);
+      if (!strict) return true;
+      return candidate.exactMatch || (candidate.matchScore ?? 0) >= 70;
+    })
+    .filter((candidate) => !candidate.excludeReason || candidate.exactMatch)
+    .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
+}
+
+function mergeStructuredCandidates(...groups: PriceCandidate[][]) {
+  const merged = groups.flat();
+  const seen = new Set<string>();
+  return merged.filter((candidate) => {
+    const key = [
+      candidate.market.toLowerCase(),
+      candidate.url,
+      candidate.price,
+      candidate.currency,
+      candidate.saleType,
+      candidate.condition.toLowerCase()
+    ].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function getEbayAccessToken() {
@@ -1184,14 +1535,16 @@ function expandReferenceQueries(
   ).slice(0, 14);
 }
 
-function normalizeEstimate(input: EstimateResponse, identity: CardIdentity): EstimateResponse {
-  const markets = Array.isArray(input.markets)
+function normalizeEstimate(input: EstimateResponse, identity: CardIdentity, marketContext?: unknown): EstimateResponse {
+  const aiMarkets = Array.isArray(input.markets)
     ? input.markets
         .filter((market) => market?.url && Number(market.priceKrw) > 0)
         .map((market) => scoreMarketQuote(market, identity.targetCondition))
         .sort((a, b) => (b.evidenceScore || 0) - (a.evidenceScore || 0))
         .slice(0, 6)
     : [];
+  const collectorMarkets = structuredCandidatesToMarkets(marketContext, identity);
+  const markets = mergeMarketQuotes(collectorMarkets, aiMarkets).slice(0, 8);
   const normalizedPrice = normalizePriceBand(input.price, markets, identity.targetCondition);
 
   const summaryPrefix =
@@ -2007,6 +2360,43 @@ function extractStructuredCandidates(marketContext: unknown): PriceCandidate[] {
   return Array.isArray(context.structuredCandidates)
     ? (context.structuredCandidates as PriceCandidate[])
     : [];
+}
+
+function structuredCandidatesToMarkets(marketContext: unknown, identity: CardIdentity): MarketQuote[] {
+  return extractStructuredCandidates(marketContext)
+    .filter((candidate) => candidate.approximateKrw > 0)
+    .filter((candidate) => candidate.numberMatch !== false)
+    .filter((candidate) => candidate.conditionMatch !== false || candidate.exactMatch)
+    .filter((candidate) => (candidate.matchScore ?? 0) >= 70 || candidate.exactMatch)
+    .map((candidate) => ({
+      market: candidate.market,
+      label: candidate.title,
+      priceKrw: candidate.approximateKrw,
+      condition: normalizeCandidateCondition(candidate.title, identity, candidate.saleType),
+      category: categorizeCandidate(candidate, identity.targetCondition),
+      soldAt: inferSoldDate(candidate.title),
+      url: candidate.url
+    }))
+    .map((market) => scoreMarketQuote(market, identity.targetCondition))
+    .sort((a, b) => (b.evidenceScore || 0) - (a.evidenceScore || 0));
+}
+
+function mergeMarketQuotes(...groups: MarketQuote[][]) {
+  const seen = new Set<string>();
+  return groups
+    .flat()
+    .filter((market) => market.url && market.priceKrw > 0)
+    .filter((market) => {
+      const key = `${market.market.toLowerCase()}|${market.url}|${market.priceKrw}|${market.condition.toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => (b.evidenceScore || 0) - (a.evidenceScore || 0));
+}
+
+function inferSoldDate(title: string) {
+  return title.match(/\b(20\d{2}-\d{2}-\d{2})\b/)?.[1];
 }
 
 function extractUnstructuredCandidates(
