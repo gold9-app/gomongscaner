@@ -912,7 +912,7 @@ function extractKreamNuxtCandidates(html: string, detailUrl: string, identity: C
   const summaryIndex = payload.indexOf("transaction_history_summary");
   if (summaryIndex < 0) return [];
 
-  const chunk = payload.slice(summaryIndex, Math.min(payload.length, summaryIndex + 12000));
+  const chunk = payload.slice(summaryIndex, Math.min(payload.length, summaryIndex + 120000));
   const salesSection = betweenMarkers(chunk, "\"체결 거래\"", "\"판매 입찰\"");
   const asksSection = betweenMarkers(chunk, "\"판매 입찰\"", "\"구매 입찰\"");
   const bidsSection = betweenMarkers(chunk, "\"구매 입찰\"", "\"로그인\"");
