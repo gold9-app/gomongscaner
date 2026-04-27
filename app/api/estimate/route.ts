@@ -177,7 +177,7 @@ const FX_JPY_KRW = Number(process.env.FX_JPY_KRW) || 9.5;
 const FX_EUR_KRW = Number(process.env.FX_EUR_KRW) || 1550;
 const FX_GBP_KRW = Number(process.env.FX_GBP_KRW) || 1800;
 const FX_HKD_KRW = Number(process.env.FX_HKD_KRW) || 178;
-const HTML_FETCH_TIMEOUT_MS = 10000;
+const HTML_FETCH_TIMEOUT_MS = 15000;
 const POKEMON_NAME_ENTRIES = pokemonMultilang as PokemonNameEntry[];
 const POKEMON_NAME_INDEX = buildPokemonNameIndex(POKEMON_NAME_ENTRIES);
 
@@ -406,19 +406,19 @@ async function collectMarketContext(identity: CardIdentity) {
   const searchPlan = buildMarketSearchPlan(identity);
   const [ebayBrowse, ebaySold, ebayCurrent, priceCharting, snkrdunk, kream] = await Promise.all([
     searchEbayBrowse(identity, searchPlan),
-    withTimeout(collectEbayHtml(identity, searchPlan, "sold"), 20000, "eBay sold collector timed out").catch(() => []),
-    withTimeout(collectEbayHtml(identity, searchPlan, "current"), 20000, "eBay current collector timed out").catch(
+    withTimeout(collectEbayHtml(identity, searchPlan, "sold"), 30000, "eBay sold collector timed out").catch(() => []),
+    withTimeout(collectEbayHtml(identity, searchPlan, "current"), 30000, "eBay current collector timed out").catch(
       () => []
     ),
-    withTimeout(collectPriceCharting(identity, searchPlan), 20000, "PriceCharting collector timed out").catch(() => []),
-    withTimeout(collectSnkrdunk(identity, searchPlan), 20000, "SNKRDUNK collector timed out").catch(() => []),
-    withTimeout(collectKream(identity, searchPlan), 20000, "KREAM collector timed out").catch(() => [])
+    withTimeout(collectPriceCharting(identity, searchPlan), 30000, "PriceCharting collector timed out").catch(() => []),
+    withTimeout(collectSnkrdunk(identity, searchPlan), 30000, "SNKRDUNK collector timed out").catch(() => []),
+    withTimeout(collectKream(identity, searchPlan), 30000, "KREAM collector timed out").catch(() => [])
   ]);
 
   const direct = mergeStructuredCandidates(ebaySold, ebayCurrent, priceCharting, snkrdunk, kream);
   const shouldRunPerplexity = needsPerplexityResearch(identity) || direct.length === 0;
   const perplexity = shouldRunPerplexity
-    ? await withTimeout(searchMarketPrices(identity, searchPlan), 25000, "Perplexity search timed out").catch((error) => ({
+    ? await withTimeout(searchMarketPrices(identity, searchPlan), 30000, "Perplexity search timed out").catch((error) => ({
         error: error instanceof Error ? error.message : "Perplexity search failed"
       }))
     : { skipped: true, reason: "high-confidence structured identity with direct market coverage" };
@@ -709,7 +709,7 @@ async function searchEbayBrowse(
       Authorization: `Bearer ${token}`,
       "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US"
     },
-    signal: AbortSignal.timeout(10000)
+    signal: AbortSignal.timeout(15000)
   });
 
   if (!response.ok) {
@@ -857,7 +857,7 @@ async function collectSnkrdunkSearchApi(identity: CardIdentity, query: string): 
       Origin: "https://snkrdunk.com"
     },
     cache: "no-store",
-    signal: AbortSignal.timeout(10000)
+    signal: AbortSignal.timeout(15000)
   });
 
   if (!response.ok) return [];
