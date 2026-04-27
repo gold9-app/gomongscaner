@@ -2194,7 +2194,7 @@ function normalizeEstimate(input: EstimateResponse, identity: CardIdentity, mark
       medianKrw: strictFailure ? 0 : normalizedPrice.medianKrw,
       confidence: strictFailure || identity.confidence < 65 ? "low" : normalizedPrice.confidence,
       summary: strictFailure
-        ? `${summaryPrefix}정확히 일치하는 거래 근거가 부족해 가격을 숨깁니다. 다만 KREAM, SNKRDUNK, eBay, PriceCharting는 계속 조회합니다.`
+        ? `${summaryPrefix}정확히 일치하는 거래 근거가 부족해 가격을 숨깁니다. 다만 KREAM, SNKRDUNK, eBay, PriceCharting는 계속 조회하고, 판매완료가 없어도 현재 판매중 매물은 보조 근거로 반영합니다.`
         : `${summaryPrefix}${input.price?.summary || "가격 후보가 충분하지 않아 보수적으로 추정했습니다."}`
     },
     markets: strictFailure ? markets.slice(0, 4) : markets,
@@ -2220,7 +2220,7 @@ function normalizePriceBand(
   const referenceMarkets = targetMarkets.filter((market) => market.category === "reference");
   const chosen =
     soldMarkets.length > 0
-      ? soldMarkets
+      ? soldMarkets.concat(listingMarkets)
       : listingMarkets.length > 0
         ? listingMarkets
         : referenceMarkets;
@@ -3098,12 +3098,13 @@ function shouldRejectPriceEstimate(
   const soldCount = exactCandidates.filter((candidate) => candidate.saleType === "sold").length;
   const listingCount = exactCandidates.filter((candidate) => candidate.saleType === "listing").length;
   const totalCount = exactCandidates.length;
+  const hasMeaningfulListingSupport = listingCount >= 1 && totalCount >= 2;
 
   if (identity.targetCondition === "psa10" || identity.targetCondition === "psa9") {
-    return soldCount < 1 && totalCount < 2;
+    return soldCount < 1 && !hasMeaningfulListingSupport;
   }
 
-  return soldCount < 1 && listingCount < 2;
+  return soldCount < 1 && !hasMeaningfulListingSupport;
 }
 
 function candidateSupportsIdentity(candidate: PriceCandidate, identity: CardIdentity) {
