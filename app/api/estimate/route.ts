@@ -1005,7 +1005,11 @@ function extractMarketDetailCandidates(
 ) {
   const embeddedCandidates =
     market === "KREAM"
-      ? [...extractKreamRenderedSummaryCandidates(html, detailUrl, identity), ...extractKreamNuxtCandidates(html, detailUrl, identity)]
+      ? [
+          ...extractKreamRenderedSummaryCandidates(html, detailUrl, identity),
+          ...extractKreamNuxtCandidates(html, detailUrl, identity),
+          ...extractKreamNuxtRegexCandidates(html, detailUrl, identity)
+        ]
       : [];
   const normalizedHtml = decodeHtml(html);
   const text = decodeHtml(stripTags(html)).replace(/\s+/g, " ").trim();
@@ -1103,6 +1107,58 @@ function extractKreamNuxtCandidates(html: string, detailUrl: string, identity: C
     ...parseKreamOrderSection(asksSection, detailUrl, identity, "ask"),
     ...parseKreamOrderSection(bidsSection, detailUrl, identity, "bid")
   ];
+
+  return dedupePriceCandidates(candidates);
+}
+
+function extractKreamNuxtRegexCandidates(html: string, detailUrl: string, identity: CardIdentity) {
+  const payload = extractNuxtDataPayload(html);
+  if (!payload) return [];
+
+  const candidates: PriceCandidate[] = [];
+  const targetTerms = detailConditionTerms(identity.targetCondition).map((term) => term.toLowerCase());
+
+  const salesPattern =
+    /\{"product_id":\d+,"product_option":\d+,"price":\d+,"is_immediate_delivery_item":[^}]+\},\{"product_id":\d+,"key":\d+,"name":\d+,"name_display":\d+,"id":\d+\},"([^"]+)",\d+,(\d{5,7}),"(20\d{2}-\d{2}-\d{2}T[^"]+)","([^"]+)"/g;
+  for (const match of payload.matchAll(salesPattern)) {
+    const optionLabel = cleanString(match[1]);
+    if (!matchesTargetOption(optionLabel, targetTerms)) continue;
+    const price = Number(match[2]);
+    if (!price) continue;
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market: "KREAM",
+        detailUrl,
+        defaultCurrency: "KRW",
+        price,
+        saleType: "sold",
+        title: `${identity.name} ${identity.number} ${optionLabel} 체결 거래 ${cleanString(match[4])}`.trim(),
+        matchScore: 100
+      })
+    );
+  }
+
+  const orderPattern =
+    /\{"product_id":\d+,"product_option":\d+,"price":\d+,"quantity":\d+,"is_immediate_delivery_item":[^}]+\},\{"product_id":\d+,"key":\d+,"name":\d+,"name_display":\d+,"id":\d+\},"([^"]+)",\d+,(\d{5,7})(?=,|})/g;
+  for (const match of payload.matchAll(orderPattern)) {
+    const optionLabel = cleanString(match[1]);
+    if (!matchesTargetOption(optionLabel, targetTerms)) continue;
+    const price = Number(match[2]);
+    if (!price) continue;
+    candidates.push(
+      makeDetailCandidate({
+        identity,
+        market: "KREAM",
+        detailUrl,
+        defaultCurrency: "KRW",
+        price,
+        saleType: "listing",
+        title: `${identity.name} ${identity.number} ${optionLabel} 현재 매물`.trim(),
+        matchScore: 98
+      })
+    );
+  }
 
   return dedupePriceCandidates(candidates);
 }
