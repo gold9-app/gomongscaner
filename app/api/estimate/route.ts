@@ -965,7 +965,9 @@ async function collectKreamPrimaryDetailCandidates(query: string, identity: Card
       const detailHtml = await fetchHtml(detailUrl);
       if (!kreamDetailLikelyMatchesIdentity(detailHtml, identity)) continue;
       const direct = extractKreamDirectPayloadCandidates(detailHtml, detailUrl, identity);
-      if (direct.length > 0) return direct;
+      const parsed = extractMarketDetailCandidates(detailHtml, detailUrl, "KREAM", identity, "KRW");
+      const combined = dedupePriceCandidates([...direct, ...parsed]);
+      if (combined.length > 0) return combined;
     } catch {
       continue;
     }
@@ -982,7 +984,10 @@ async function collectKreamDirectDetailCandidates(searchHtml: string, identity: 
     detailUrls.map(async (detailUrl) => {
       try {
         const detailHtml = await fetchHtml(detailUrl);
-        return extractKreamDirectPayloadCandidates(detailHtml, detailUrl, identity);
+        return dedupePriceCandidates([
+          ...extractKreamDirectPayloadCandidates(detailHtml, detailUrl, identity),
+          ...extractMarketDetailCandidates(detailHtml, detailUrl, "KREAM", identity, "KRW")
+        ]);
       } catch {
         return [];
       }
