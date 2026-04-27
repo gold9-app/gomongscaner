@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import pokemonMultilang from "../../../pokemon_multilang.json";
 
+export const runtime = "nodejs";
+export const preferredRegion = "icn1";
+export const maxDuration = 60;
+
 type EstimateRequest = {
   mode: "photo" | "text";
   intent?: "own" | "buy";
