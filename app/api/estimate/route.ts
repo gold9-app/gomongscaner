@@ -404,21 +404,53 @@ async function generateGeminiContent(parts: Array<Record<string, unknown>>) {
 
 async function collectMarketContext(identity: CardIdentity) {
   const searchPlan = buildMarketSearchPlan(identity);
+  if (shouldPrioritizeKoreanMarkets(identity)) {
+    const [snkrdunk, kream] = await Promise.all([
+      withTimeout(collectSnkrdunk(identity, searchPlan), 25000, "SNKRDUNK collector timed out").catch(() => []),
+      withTimeout(collectKream(identity, searchPlan), 25000, "KREAM collector timed out").catch(() => [])
+    ]);
+
+    const direct = mergeStructuredCandidates(snkrdunk, kream);
+    if (direct.length > 0) {
+      return {
+        generatedAt: new Date().toISOString(),
+        fx: {
+          USD_KRW: FX_USD_KRW,
+          JPY_KRW: FX_JPY_KRW,
+          EUR_KRW: FX_EUR_KRW,
+          GBP_KRW: FX_GBP_KRW,
+          HKD_KRW: FX_HKD_KRW
+        },
+        searchPlan,
+        requiredSources: buildRequiredSourceTargets(identity, searchPlan),
+        sourceCoverage: {
+          eBay: { count: 0, directCount: 0 },
+          PriceCharting: { count: 0, directCount: 0 },
+          SNKRDUNK: { count: snkrdunk.length, directCount: snkrdunk.length },
+          KREAM: { count: kream.length, directCount: kream.length }
+        },
+        structuredCandidates: direct,
+        directCandidates: direct,
+        perplexity: { skipped: true, reason: "korean-market-priority direct coverage" }
+      };
+    }
+  }
+
   const [ebayBrowse, ebaySold, ebayCurrent, priceCharting, snkrdunk, kream] = await Promise.all([
     searchEbayBrowse(identity, searchPlan),
-    withTimeout(collectEbayHtml(identity, searchPlan, "sold"), 30000, "eBay sold collector timed out").catch(() => []),
-    withTimeout(collectEbayHtml(identity, searchPlan, "current"), 30000, "eBay current collector timed out").catch(
+    withTimeout(collectEbayHtml(identity, searchPlan, "sold"), 20000, "eBay sold collector timed out").catch(() => []),
+    withTimeout(collectEbayHtml(identity, searchPlan, "current"), 20000, "eBay current collector timed out").catch(
       () => []
     ),
-    withTimeout(collectPriceCharting(identity, searchPlan), 30000, "PriceCharting collector timed out").catch(() => []),
-    withTimeout(collectSnkrdunk(identity, searchPlan), 30000, "SNKRDUNK collector timed out").catch(() => []),
-    withTimeout(collectKream(identity, searchPlan), 30000, "KREAM collector timed out").catch(() => [])
+    withTimeout(collectPriceCharting(identity, searchPlan), 20000, "PriceCharting collector timed out").catch(() => []),
+    withTimeout(collectSnkrdunk(identity, searchPlan), 20000, "SNKRDUNK collector timed out").catch(() => []),
+    withTimeout(collectKream(identity, searchPlan), 20000, "KREAM collector timed out").catch(() => [])
   ]);
 
   const direct = mergeStructuredCandidates(ebaySold, ebayCurrent, priceCharting, snkrdunk, kream);
   const shouldRunPerplexity = needsPerplexityResearch(identity) || direct.length === 0;
   const perplexity = shouldRunPerplexity
-    ? await withTimeout(searchMarketPrices(identity, searchPlan), 30000, "Perplexity search timed out").catch((error) => ({
+    ? await withTimeout(searchMarketPrices(identity, searchPlan), 25000, "Perplexity search timed out").catch((error) => ({
         error: error instanceof Error ? error.message : "Perplexity search failed"
       }))
     : { skipped: true, reason: "high-confidence structured identity with direct market coverage" };
@@ -444,6 +476,12 @@ async function collectMarketContext(identity: CardIdentity) {
     directCandidates: direct,
     perplexity
   };
+}
+
+function shouldPrioritizeKoreanMarkets(identity: CardIdentity) {
+  const language = identity.language.toLowerCase();
+  const target = identity.targetCondition.toLowerCase();
+  return language.includes("korean") && (target.startsWith("psa") || identity.rarity.toLowerCase() === "promo");
 }
 
 function needsPerplexityResearch(identity: CardIdentity) {
