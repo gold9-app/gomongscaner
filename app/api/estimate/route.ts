@@ -891,9 +891,16 @@ async function collectKream(
       approximateKrw: convertToKrw(candidate.price, candidate.currency || "KRW")
     }));
 
+    const embeddedSearchCandidates = extractMarketDetailCandidates(
+      html,
+      url,
+      "KREAM",
+      identity,
+      "KRW"
+    );
     const detailCandidates = await collectMarketDetailCandidates("KREAM", listCandidates, identity, "KRW");
     const searchDetailCandidates = await collectKreamSearchDetailCandidates(html, identity);
-    collected.push(...listCandidates, ...detailCandidates, ...searchDetailCandidates);
+    collected.push(...listCandidates, ...embeddedSearchCandidates, ...detailCandidates, ...searchDetailCandidates);
 
     const filtered = filterStructuredCandidates(dedupePriceCandidates(collected), identity);
     if (filtered.length >= 3 || filtered.some((candidate) => candidate.saleType === "sold")) {
