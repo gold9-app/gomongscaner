@@ -3665,9 +3665,11 @@ function setSignalsForIdentity(identity: CardIdentity) {
     .split(/[^a-z0-9가-힣ぁ-ゟ゠-ヿ一-龯]+/)
     .filter((token) => token.length >= 3)
     .filter((token) => !["pokemon", "class", "pack", "high", "card", "the", "set"].includes(token));
+  const isPromoIdentity =
+    identity.rarity.toLowerCase() === "promo" || /\bsv-p\b/i.test(identity.number) || /\bpromo\b/i.test(identity.setName);
 
   return {
-    required: identity.setName !== "Unknown set" || Boolean(setCode),
+    required: !isPromoIdentity && (identity.setName !== "Unknown set" || Boolean(setCode)),
     signals: uniqueNonEmpty([setCode, ...tokenCandidates])
   };
 }
