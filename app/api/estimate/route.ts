@@ -966,12 +966,29 @@ async function collectSnkrdunkQuick(identity: CardIdentity, searchPlan: MarketSe
 
   for (const query of queries) {
     const apiCandidates = await collectSnkrdunkSearchApi(identity, query).catch(() => []);
-    const detailCandidates = await collectMarketDetailCandidates("SNKRDUNK", apiCandidates, identity, "JPY").catch(() => []);
+    const detailCandidates = await collectSnkrdunkMirrorDetails(apiCandidates, identity).catch(() => []);
     const filtered = filterStructuredCandidates([...apiCandidates, ...detailCandidates], identity).slice(0, 12);
     if (filtered.length > 0) return filtered;
   }
 
   return [];
+}
+
+async function collectSnkrdunkMirrorDetails(baseCandidates: PriceCandidate[], identity: CardIdentity) {
+  const detailUrls = uniqueNonEmpty(
+    baseCandidates
+      .filter((candidate) => candidate.url.includes("/trading-cards/"))
+      .map((candidate) => candidate.url)
+  ).slice(0, 3);
+
+  const pages = await Promise.all(
+    detailUrls.map(async (detailUrl) => {
+      const mirrorText = await fetchMirrorText(detailUrl);
+      return extractMirrorDetailCandidates(mirrorText, detailUrl, "SNKRDUNK", identity, "JPY");
+    })
+  );
+
+  return dedupePriceCandidates(pages.flat());
 }
 
 async function collectSnkrdunkSearchApi(identity: CardIdentity, query: string): Promise<PriceCandidate[]> {
