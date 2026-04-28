@@ -1061,11 +1061,30 @@ async function collectKream(
 async function collectKreamQuick(identity: CardIdentity, searchPlan: MarketSearchPlan): Promise<PriceCandidate[]> {
   const queries = uniqueNonEmpty(searchPlan.marketQueries.kream).slice(0, 2);
   for (const query of queries) {
+    const mirrorOnly = await collectKreamMirrorQuick(query, identity).catch(() => []);
+    const mirrorFiltered = filterStructuredCandidates(mirrorOnly, identity).slice(0, 12);
+    if (mirrorFiltered.length > 0) return mirrorFiltered;
     const primaryFastPath = await collectKreamPrimaryDetailCandidates(query, identity).catch(() => []);
     const filtered = filterStructuredCandidates(primaryFastPath, identity).slice(0, 12);
     if (filtered.length > 0) return filtered;
   }
   return [];
+}
+
+async function collectKreamMirrorQuick(query: string, identity: CardIdentity) {
+  const searchUrl = `https://kream.co.kr/search?keyword=${encodeURIComponent(query)}`;
+  const searchText = await fetchMirrorText(searchUrl);
+  const detailUrls = extractKreamMirrorSearchDetailUrls(searchText).slice(0, 2);
+  if (detailUrls.length === 0) return [];
+
+  const pages = await Promise.all(
+    detailUrls.map(async (detailUrl) => {
+      const detailText = await fetchMirrorText(detailUrl);
+      return extractMirrorDetailCandidates(detailText, detailUrl, "KREAM", identity, "KRW");
+    })
+  );
+
+  return dedupePriceCandidates(pages.flat());
 }
 
 async function collectKreamPrimaryDetailCandidates(query: string, identity: CardIdentity) {
