@@ -943,7 +943,8 @@ async function collectSnkrdunkQuick(identity: CardIdentity, searchPlan: MarketSe
   const query = searchPlan.marketQueries.snkrdunk[0];
   if (!query) return [];
   const apiCandidates = await collectSnkrdunkSearchApi(identity, query).catch(() => []);
-  return filterStructuredCandidates(apiCandidates, identity).slice(0, 12);
+  const detailCandidates = await collectMarketDetailCandidates("SNKRDUNK", apiCandidates, identity, "JPY").catch(() => []);
+  return filterStructuredCandidates([...apiCandidates, ...detailCandidates], identity).slice(0, 12);
 }
 
 async function collectSnkrdunkSearchApi(identity: CardIdentity, query: string): Promise<PriceCandidate[]> {
@@ -981,11 +982,12 @@ async function collectSnkrdunkSearchApi(identity: CardIdentity, query: string): 
         const value = Number(item.minPrice) || 0;
         const minPriceFormat = cleanString(String(item.minPriceFormat || ""));
         const currency = detectCurrencyFromText(minPriceFormat) || "USD";
+        const id = Number(item.id) || 0;
         const classification = classifyCandidate(title, identity);
         return {
           title,
           market: "SNKRDUNK",
-          url: searchUrl,
+          url: id > 0 ? `https://snkrdunk.com/en/trading-cards/${id}/used` : searchUrl,
           price: value,
           currency,
           approximateKrw: convertToKrw(value, currency),
@@ -1321,7 +1323,9 @@ function extractMirrorDetailCandidates(
   if (!text) return [];
   const normalized = decodeHtml(text).replace(/\r/g, "");
   const trustedMirrorCandidates =
-    market === "KREAM" ? extractKreamTrustedMirrorTransactionCandidates(normalized, detailUrl, identity) : [];
+    market === "KREAM"
+      ? extractKreamTrustedMirrorTransactionCandidates(normalized, detailUrl, identity)
+      : extractSnkrdunkTrustedMirrorCandidates(normalized, detailUrl, identity);
   const combined = dedupePriceCandidates([
     ...trustedMirrorCandidates,
     ...(market === "KREAM" ? extractKreamPlainTextCandidates(normalized, detailUrl, identity) : []),
@@ -1365,6 +1369,67 @@ function extractKreamTrustedMirrorTransactionCandidates(text: string, detailUrl:
       numberMatch: true,
       conditionMatch: true
     });
+  }
+
+  return dedupePriceCandidates(candidates);
+}
+
+function extractSnkrdunkTrustedMirrorCandidates(text: string, detailUrl: string, identity: CardIdentity) {
+  if (!/snkrdunk\.com\/en\/trading-cards\/\d+\/used/i.test(detailUrl) && !/snkrdunk\.com\/en\/trading-cards\/used\//i.test(detailUrl)) {
+    return [];
+  }
+
+  const candidates: PriceCandidate[] = [];
+  const soldPattern = /\[\s*(SOLD\s+)?(PSA\s*10|PSA10|PSA\s*9|PSA9|BGS\s*10|CGC\s*10)[^\]]*?US\s*\$(\d+(?:\.\d{1,2})?)\]/gi;
+  for (const match of text.matchAll(soldPattern)) {
+    const soldFlag = Boolean(cleanString(match[1]));
+    const optionLabel = cleanString(match[2]);
+    const price = Number(match[3]);
+    if (!price) continue;
+    if (!matchesTargetOption(optionLabel, detailConditionTerms(identity.targetCondition).map((term) => term.toLowerCase()))) continue;
+    candidates.push({
+      title: `${identity.name} ${identity.number} ${soldFlag ? "SOLD " : ""}${optionLabel} SNKRDUNK similar item`.trim(),
+      market: "SNKRDUNK",
+      url: detailUrl,
+      price,
+      currency: "USD",
+      approximateKrw: convertToKrw(price, "USD"),
+      saleType: soldFlag ? "sold" : "listing",
+      condition: normalizeCandidateCondition(`${optionLabel} ${soldFlag ? "sold" : "listing"}`, identity, soldFlag ? "sold" : "listing"),
+      language: identity.language,
+      exactMatch: true,
+      excludeReason: "",
+      marketSearchQuery: identity.searchQueries[0],
+      matchScore: soldFlag ? 99 : 97,
+      numberMatch: true,
+      conditionMatch: true
+    });
+  }
+
+  const mainPattern = /#\s+([^\n]+)\s+US\s*\$(\d+(?:\.\d{1,2})?)\s+(PSA\s*10|PSA10|PSA\s*9|PSA9|BGS\s*10|CGC\s*10)/i;
+  const mainMatch = text.match(mainPattern);
+  if (mainMatch) {
+    const price = Number(mainMatch[2]);
+    const optionLabel = cleanString(mainMatch[3]);
+    if (price && matchesTargetOption(optionLabel, detailConditionTerms(identity.targetCondition).map((term) => term.toLowerCase()))) {
+      candidates.push({
+        title: `${identity.name} ${identity.number} ${optionLabel} SNKRDUNK current`.trim(),
+        market: "SNKRDUNK",
+        url: detailUrl,
+        price,
+        currency: "USD",
+        approximateKrw: convertToKrw(price, "USD"),
+        saleType: "listing",
+        condition: normalizeCandidateCondition(`${optionLabel} listing`, identity, "listing"),
+        language: identity.language,
+        exactMatch: true,
+        excludeReason: "",
+        marketSearchQuery: identity.searchQueries[0],
+        matchScore: 96,
+        numberMatch: true,
+        conditionMatch: true
+      });
+    }
   }
 
   return dedupePriceCandidates(candidates);
