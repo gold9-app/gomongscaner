@@ -1320,7 +1320,10 @@ function extractMirrorDetailCandidates(
 ) {
   if (!text) return [];
   const normalized = decodeHtml(text).replace(/\r/g, "");
+  const trustedMirrorCandidates =
+    market === "KREAM" ? extractKreamTrustedMirrorTransactionCandidates(normalized, detailUrl, identity) : [];
   const combined = dedupePriceCandidates([
+    ...trustedMirrorCandidates,
     ...(market === "KREAM" ? extractKreamPlainTextCandidates(normalized, detailUrl, identity) : []),
     ...extractDetailPriceRows(normalized, detailUrl, market, identity, defaultCurrency),
     ...extractDetailActionPrices(normalized, detailUrl, market, identity, defaultCurrency)
@@ -1328,6 +1331,43 @@ function extractMirrorDetailCandidates(
   return combined
     .filter((candidate) => candidateSupportsIdentity(candidate, identity))
     .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
+}
+
+function extractKreamTrustedMirrorTransactionCandidates(text: string, detailUrl: string, identity: CardIdentity) {
+  if (!/kream\.co\.kr\/products\/\d+/i.test(detailUrl)) return [];
+  if (!/체결 거래/.test(text)) return [];
+
+  const candidates: PriceCandidate[] = [];
+  const pattern =
+    /\b(PSA\s*10|PSA10|PSA\s*9|PSA9|BGS\s*10|BGS10|CGC\s*10|CGC10|Ungraded|Raw)\b\s*(\d{1,3}(?:,\d{3})+)원\s*(\d+\s*(?:분|시간|일|주|개월)\s*전|20\d{2}[./-]\d{2}[./-]\d{2})?/gi;
+  const targetTerms = detailConditionTerms(identity.targetCondition).map((term) => term.toLowerCase());
+
+  for (const match of text.matchAll(pattern)) {
+    const optionLabel = cleanString(match[1]);
+    if (!matchesTargetOption(optionLabel, targetTerms)) continue;
+    const price = Number(match[2].replace(/,/g, ""));
+    if (!price) continue;
+    const observed = cleanString(match[3] || "");
+    candidates.push({
+      title: `${identity.name} ${identity.number} ${optionLabel} 체결 거래 ${observed}`.trim(),
+      market: "KREAM",
+      url: detailUrl,
+      price,
+      currency: "KRW",
+      approximateKrw: price,
+      saleType: "sold",
+      condition: normalizeCandidateCondition(`${optionLabel} sold`, identity, "sold"),
+      language: identity.language,
+      exactMatch: true,
+      excludeReason: "",
+      marketSearchQuery: identity.searchQueries[0],
+      matchScore: 100,
+      numberMatch: true,
+      conditionMatch: true
+    });
+  }
+
+  return dedupePriceCandidates(candidates);
 }
 
 function extractKreamPlainTextCandidates(text: string, detailUrl: string, identity: CardIdentity) {
