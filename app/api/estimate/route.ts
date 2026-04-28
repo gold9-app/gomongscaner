@@ -408,7 +408,7 @@ async function collectMarketContext(identity: CardIdentity) {
   const searchPlan = buildMarketSearchPlan(identity);
   if (shouldPrioritizeKoreanMarkets(identity)) {
     const [snkrdunk, kream] = await Promise.all([
-      withTimeout(collectSnkrdunkQuick(identity, searchPlan), 12000, "SNKRDUNK quick collector timed out").catch(() => []),
+      withTimeout(collectSnkrdunkQuick(identity, searchPlan), 20000, "SNKRDUNK quick collector timed out").catch(() => []),
       withTimeout(collectKreamQuick(identity, searchPlan), 15000, "KREAM quick collector timed out").catch(() => [])
     ]);
 
@@ -957,10 +957,11 @@ async function collectSnkrdunk(
 
 async function collectSnkrdunkQuick(identity: CardIdentity, searchPlan: MarketSearchPlan): Promise<PriceCandidate[]> {
   const queries = uniqueNonEmpty([
-    ...searchPlan.marketQueries.snkrdunk,
-    stripConditionTerms(searchPlan.marketQueries.snkrdunk[0] || ""),
     joinSearchParts([identity.name, identity.number]),
     joinSearchParts([identity.number, identity.name])
+    ,
+    stripConditionTerms(searchPlan.marketQueries.snkrdunk[0] || ""),
+    ...searchPlan.marketQueries.snkrdunk
   ]).slice(0, 4);
 
   for (const query of queries) {
