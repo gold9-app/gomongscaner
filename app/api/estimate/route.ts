@@ -1021,9 +1021,12 @@ async function collectKreamQuick(identity: CardIdentity, searchPlan: MarketSearc
 async function collectKreamPrimaryDetailCandidates(query: string, identity: CardIdentity) {
   const url = `https://kream.co.kr/search?keyword=${encodeURIComponent(query)}`;
   const searchHtml = await fetchHtml(url).catch(() => "");
-  if (!searchHtml) return [];
-
-  const detailUrls = extractKreamSearchDetailUrls(searchHtml).slice(0, 1);
+  const mirrorSearchText =
+    searchHtml || query.length > 0 ? await fetchMirrorText(url).catch(() => "") : "";
+  const detailUrls = uniqueNonEmpty([
+    ...extractKreamSearchDetailUrls(searchHtml),
+    ...extractKreamMirrorSearchDetailUrls(mirrorSearchText)
+  ]).slice(0, 1);
   for (const detailUrl of detailUrls) {
     try {
       const detailHtml = await fetchHtml(detailUrl);
@@ -1157,6 +1160,13 @@ function extractKreamSearchDetailUrls(html: string) {
     .map((match) => match[1])
     .filter(Boolean);
 
+  return uniqueNonEmpty(ids.map((id) => `https://kream.co.kr/products/${id}`));
+}
+
+function extractKreamMirrorSearchDetailUrls(text: string) {
+  const ids = [...text.matchAll(/https:\/\/kream\.co\.kr\/products\/(\d{4,})/g)]
+    .map((match) => match[1])
+    .filter(Boolean);
   return uniqueNonEmpty(ids.map((id) => `https://kream.co.kr/products/${id}`));
 }
 
