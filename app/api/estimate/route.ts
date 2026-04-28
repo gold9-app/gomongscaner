@@ -437,7 +437,8 @@ async function collectMarketContext(identity: CardIdentity) {
       };
     }
 
-    const [ebaySold, ebayCurrent, priceCharting] = await Promise.all([
+    const [ebayBrowse, ebaySold, ebayCurrent, priceCharting] = await Promise.all([
+      withTimeout(searchEbayBrowse(identity, searchPlan), 12000, "eBay browse fast collector timed out").catch(() => []),
       withTimeout(collectEbayHtml(identity, searchPlan, "sold"), 12000, "eBay sold fast collector timed out").catch(() => []),
       withTimeout(collectEbayHtml(identity, searchPlan, "current"), 12000, "eBay current fast collector timed out").catch(
         () => []
@@ -447,7 +448,7 @@ async function collectMarketContext(identity: CardIdentity) {
       )
     ]);
 
-    const fastDirect = mergeStructuredCandidates(snkrdunk, kream, ebaySold, ebayCurrent, priceCharting);
+    const fastDirect = mergeStructuredCandidates(snkrdunk, kream, ebayBrowse, ebaySold, ebayCurrent, priceCharting);
     const fastPerplexity =
       fastDirect.length === 0
         ? await withTimeout(searchMarketPrices(identity, searchPlan), 15000, "Perplexity fast search timed out").catch(
@@ -470,7 +471,7 @@ async function collectMarketContext(identity: CardIdentity) {
       searchPlan,
       requiredSources: buildRequiredSourceTargets(identity, searchPlan),
       sourceCoverage: {
-        eBay: { count: ebaySold.length + ebayCurrent.length, directCount: ebaySold.length + ebayCurrent.length },
+        eBay: { count: ebayBrowse.length + ebaySold.length + ebayCurrent.length, directCount: ebayBrowse.length + ebaySold.length + ebayCurrent.length },
         PriceCharting: { count: priceCharting.length, directCount: priceCharting.length },
         SNKRDUNK: { count: snkrdunk.length, directCount: snkrdunk.length },
         KREAM: { count: kream.length, directCount: kream.length }
