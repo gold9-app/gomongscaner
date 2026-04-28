@@ -209,11 +209,13 @@ export async function POST(request: NextRequest) {
         ).catch(() => fallbackIdentity(body));
     const identity = applyStructuredInputConstraints(identifiedIdentity, body);
     const marketContext = await collectMarketContext(identity);
-    const estimate = await withTimeout(
-      summarizePrice(identity, marketContext, body.intent || "own"),
-      50000,
-      "Claude summarization timed out"
-    ).catch((error) => fallbackEstimate(identity, marketContext, error));
+    const estimate = shouldUseFastStructuredEstimate(body, identity)
+      ? normalizeEstimate(fallbackEstimate(identity, marketContext, new Error("fast-structured-estimate")), identity, marketContext)
+      : await withTimeout(
+          summarizePrice(identity, marketContext, body.intent || "own"),
+          50000,
+          "Claude summarization timed out"
+        ).catch((error) => fallbackEstimate(identity, marketContext, error));
 
     return NextResponse.json(estimate);
   } catch (error) {
@@ -434,6 +436,39 @@ async function collectMarketContext(identity: CardIdentity) {
         perplexity: { skipped: true, reason: "korean-market-priority direct coverage" }
       };
     }
+
+    const [ebaySold, ebayCurrent, priceCharting] = await Promise.all([
+      withTimeout(collectEbayHtml(identity, searchPlan, "sold"), 12000, "eBay sold fast collector timed out").catch(() => []),
+      withTimeout(collectEbayHtml(identity, searchPlan, "current"), 12000, "eBay current fast collector timed out").catch(
+        () => []
+      ),
+      withTimeout(collectPriceCharting(identity, searchPlan), 12000, "PriceCharting fast collector timed out").catch(
+        () => []
+      )
+    ]);
+
+    const fastDirect = mergeStructuredCandidates(snkrdunk, kream, ebaySold, ebayCurrent, priceCharting);
+    return {
+      generatedAt: new Date().toISOString(),
+      fx: {
+        USD_KRW: FX_USD_KRW,
+        JPY_KRW: FX_JPY_KRW,
+        EUR_KRW: FX_EUR_KRW,
+        GBP_KRW: FX_GBP_KRW,
+        HKD_KRW: FX_HKD_KRW
+      },
+      searchPlan,
+      requiredSources: buildRequiredSourceTargets(identity, searchPlan),
+      sourceCoverage: {
+        eBay: { count: ebaySold.length + ebayCurrent.length, directCount: ebaySold.length + ebayCurrent.length },
+        PriceCharting: { count: priceCharting.length, directCount: priceCharting.length },
+        SNKRDUNK: { count: snkrdunk.length, directCount: snkrdunk.length },
+        KREAM: { count: kream.length, directCount: kream.length }
+      },
+      structuredCandidates: fastDirect,
+      directCandidates: fastDirect,
+      perplexity: { skipped: true, reason: "korean-market-priority fast exact mode" }
+    };
   }
 
   const [ebayBrowse, ebaySold, ebayCurrent, priceCharting, snkrdunk, kream] = await Promise.all([
@@ -483,6 +518,10 @@ function shouldPrioritizeKoreanMarkets(identity: CardIdentity) {
   const language = identity.language.toLowerCase();
   const target = identity.targetCondition.toLowerCase();
   return language.includes("korean") && (target.startsWith("psa") || identity.rarity.toLowerCase() === "promo");
+}
+
+function shouldUseFastStructuredEstimate(input: EstimateRequest, identity: CardIdentity) {
+  return hasStrongStructuredIdentityInput(input) && shouldPrioritizeKoreanMarkets(identity);
 }
 
 function needsPerplexityResearch(identity: CardIdentity) {
