@@ -918,33 +918,59 @@ async function collectSnkrdunk(
   identity: CardIdentity,
   searchPlan: MarketSearchPlan
 ): Promise<PriceCandidate[]> {
-  const query = searchPlan.marketQueries.snkrdunk[0] || buildSourceQuery(identity);
-  const apiCandidates = await collectSnkrdunkSearchApi(identity, query).catch(() => []);
-  const url = `https://snkrdunk.com/en/search/result?keyword=${encodeURIComponent(query)}`;
-  const html = await fetchHtml(url);
-  const listCandidates = extractHtmlCards(html, "snkrdunk.com", query, identity, "listing").map((candidate) => ({
-    ...candidate,
-    market: "SNKRDUNK",
-    currency: candidate.currency || "JPY",
-    approximateKrw: convertToKrw(candidate.price, candidate.currency || "JPY")
-  }));
+  const queries = uniqueNonEmpty([
+    ...searchPlan.marketQueries.snkrdunk,
+    stripConditionTerms(searchPlan.marketQueries.snkrdunk[0] || ""),
+    joinSearchParts([identity.name, identity.number]),
+    joinSearchParts([identity.number, identity.name])
+  ]).slice(0, 4);
 
-  const detailCandidates = await collectMarketDetailCandidates(
-    "SNKRDUNK",
-    [...apiCandidates, ...listCandidates],
-    identity,
-    "JPY"
-  );
+  const collected: PriceCandidate[] = [];
+  for (const query of queries) {
+    const apiCandidates = await collectSnkrdunkSearchApi(identity, query).catch(() => []);
+    let listCandidates: PriceCandidate[] = [];
+    try {
+      const url = `https://snkrdunk.com/en/search/result?keyword=${encodeURIComponent(query)}`;
+      const html = await fetchHtml(url);
+      listCandidates = extractHtmlCards(html, "snkrdunk.com", query, identity, "listing").map((candidate) => ({
+        ...candidate,
+        market: "SNKRDUNK",
+        currency: candidate.currency || "JPY",
+        approximateKrw: convertToKrw(candidate.price, candidate.currency || "JPY")
+      }));
+    } catch {}
 
-  return filterStructuredCandidates([...apiCandidates, ...listCandidates, ...detailCandidates], identity).slice(0, 24);
+    const detailCandidates = await collectMarketDetailCandidates(
+      "SNKRDUNK",
+      [...apiCandidates, ...listCandidates],
+      identity,
+      "JPY"
+    ).catch(() => []);
+
+    collected.push(...apiCandidates, ...listCandidates, ...detailCandidates);
+    const filtered = filterStructuredCandidates(dedupePriceCandidates(collected), identity);
+    if (filtered.length > 0) return filtered.slice(0, 24);
+  }
+
+  return filterStructuredCandidates(dedupePriceCandidates(collected), identity).slice(0, 24);
 }
 
 async function collectSnkrdunkQuick(identity: CardIdentity, searchPlan: MarketSearchPlan): Promise<PriceCandidate[]> {
-  const query = searchPlan.marketQueries.snkrdunk[0];
-  if (!query) return [];
-  const apiCandidates = await collectSnkrdunkSearchApi(identity, query).catch(() => []);
-  const detailCandidates = await collectMarketDetailCandidates("SNKRDUNK", apiCandidates, identity, "JPY").catch(() => []);
-  return filterStructuredCandidates([...apiCandidates, ...detailCandidates], identity).slice(0, 12);
+  const queries = uniqueNonEmpty([
+    ...searchPlan.marketQueries.snkrdunk,
+    stripConditionTerms(searchPlan.marketQueries.snkrdunk[0] || ""),
+    joinSearchParts([identity.name, identity.number]),
+    joinSearchParts([identity.number, identity.name])
+  ]).slice(0, 4);
+
+  for (const query of queries) {
+    const apiCandidates = await collectSnkrdunkSearchApi(identity, query).catch(() => []);
+    const detailCandidates = await collectMarketDetailCandidates("SNKRDUNK", apiCandidates, identity, "JPY").catch(() => []);
+    const filtered = filterStructuredCandidates([...apiCandidates, ...detailCandidates], identity).slice(0, 12);
+    if (filtered.length > 0) return filtered;
+  }
+
+  return [];
 }
 
 async function collectSnkrdunkSearchApi(identity: CardIdentity, query: string): Promise<PriceCandidate[]> {
