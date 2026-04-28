@@ -1030,9 +1030,12 @@ async function collectKreamPrimaryDetailCandidates(query: string, identity: Card
       if (!kreamDetailLikelyMatchesIdentity(detailHtml, identity)) continue;
       const direct = extractKreamDirectPayloadCandidates(detailHtml, detailUrl, identity);
       const parsed = extractMarketDetailCandidates(detailHtml, detailUrl, "KREAM", identity, "KRW");
-      const combined = dedupePriceCandidates([...direct, ...parsed]);
+      const mirrored = direct.length + parsed.length > 0 ? [] : await collectMirrorDetailCandidates("KREAM", detailUrl, identity, "KRW");
+      const combined = dedupePriceCandidates([...direct, ...parsed, ...mirrored]);
       if (combined.length > 0) return combined;
     } catch {
+      const mirrored = await collectMirrorDetailCandidates("KREAM", detailUrl, identity, "KRW").catch(() => []);
+      if (mirrored.length > 0) return mirrored;
       continue;
     }
   }
@@ -1048,12 +1051,14 @@ async function collectKreamDirectDetailCandidates(searchHtml: string, identity: 
     detailUrls.map(async (detailUrl) => {
       try {
         const detailHtml = await fetchHtml(detailUrl);
-        return dedupePriceCandidates([
+        const directCandidates = dedupePriceCandidates([
           ...extractKreamDirectPayloadCandidates(detailHtml, detailUrl, identity),
           ...extractMarketDetailCandidates(detailHtml, detailUrl, "KREAM", identity, "KRW")
         ]);
+        if (directCandidates.length > 0) return directCandidates;
+        return collectMirrorDetailCandidates("KREAM", detailUrl, identity, "KRW");
       } catch {
-        return [];
+        return collectMirrorDetailCandidates("KREAM", detailUrl, identity, "KRW").catch(() => []);
       }
     })
   );
@@ -1132,9 +1137,11 @@ async function collectKreamSearchDetailCandidates(html: string, identity: CardId
     detailUrls.map(async (detailUrl) => {
       try {
         const detailHtml = await fetchHtml(detailUrl);
-        return extractMarketDetailCandidates(detailHtml, detailUrl, "KREAM", identity, "KRW");
+        const parsed = extractMarketDetailCandidates(detailHtml, detailUrl, "KREAM", identity, "KRW");
+        if (parsed.length > 0) return parsed;
+        return collectMirrorDetailCandidates("KREAM", detailUrl, identity, "KRW");
       } catch {
-        return [];
+        return collectMirrorDetailCandidates("KREAM", detailUrl, identity, "KRW").catch(() => []);
       }
     })
   );
@@ -1170,14 +1177,26 @@ async function collectMarketDetailCandidates(
     detailUrls.map(async (detailUrl) => {
       try {
         const html = await fetchHtml(detailUrl);
-        return extractMarketDetailCandidates(html, detailUrl, market, identity, defaultCurrency);
+        const parsed = extractMarketDetailCandidates(html, detailUrl, market, identity, defaultCurrency);
+        if (parsed.length > 0) return parsed;
+        return collectMirrorDetailCandidates(market, detailUrl, identity, defaultCurrency);
       } catch {
-        return [];
+        return collectMirrorDetailCandidates(market, detailUrl, identity, defaultCurrency).catch(() => []);
       }
     })
   );
 
   return filterStructuredCandidates(pages.flat(), identity).slice(0, 12);
+}
+
+async function collectMirrorDetailCandidates(
+  market: "KREAM" | "SNKRDUNK",
+  detailUrl: string,
+  identity: CardIdentity,
+  defaultCurrency: "KRW" | "JPY"
+) {
+  const mirrorText = await fetchMirrorText(detailUrl);
+  return extractMirrorDetailCandidates(mirrorText, detailUrl, market, identity, defaultCurrency);
 }
 
 function extractMarketDetailCandidates(
@@ -1209,6 +1228,25 @@ function extractMarketDetailCandidates(
   }
 
   return dedupePriceCandidates([...embeddedCandidates, ...textCandidates, ...candidates])
+    .filter((candidate) => candidateSupportsIdentity(candidate, identity))
+    .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
+}
+
+function extractMirrorDetailCandidates(
+  text: string,
+  detailUrl: string,
+  market: "KREAM" | "SNKRDUNK",
+  identity: CardIdentity,
+  defaultCurrency: "KRW" | "JPY"
+) {
+  if (!text) return [];
+  const normalized = decodeHtml(text).replace(/\r/g, "");
+  const combined = dedupePriceCandidates([
+    ...(market === "KREAM" ? extractKreamPlainTextCandidates(normalized, detailUrl, identity) : []),
+    ...extractDetailPriceRows(normalized, detailUrl, market, identity, defaultCurrency),
+    ...extractDetailActionPrices(normalized, detailUrl, market, identity, defaultCurrency)
+  ]);
+  return combined
     .filter((candidate) => candidateSupportsIdentity(candidate, identity))
     .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
 }
@@ -1744,6 +1782,26 @@ async function fetchHtml(url: string) {
 
   if (!response.ok) {
     throw new Error(`HTML fetch failed: ${response.status} ${url}`);
+  }
+
+  return response.text();
+}
+
+async function fetchMirrorText(url: string) {
+  const mirrorUrl = `https://r.jina.ai/http://${url}`;
+  const response = await fetch(mirrorUrl, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      Accept: "text/plain, text/markdown;q=0.9, */*;q=0.8",
+      "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7,ja;q=0.6"
+    },
+    cache: "no-store",
+    signal: AbortSignal.timeout(12000)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Mirror fetch failed: ${response.status} ${url}`);
   }
 
   return response.text();
