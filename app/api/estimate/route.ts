@@ -448,6 +448,16 @@ async function collectMarketContext(identity: CardIdentity) {
     ]);
 
     const fastDirect = mergeStructuredCandidates(snkrdunk, kream, ebaySold, ebayCurrent, priceCharting);
+    const fastPerplexity =
+      fastDirect.length === 0
+        ? await withTimeout(searchMarketPrices(identity, searchPlan), 15000, "Perplexity fast search timed out").catch(
+            (error) => ({
+              error: error instanceof Error ? error.message : "Perplexity fast search failed"
+            })
+          )
+        : { skipped: true, reason: "fast direct coverage" };
+    const fastPerplexityCandidates = extractPerplexityStructuredCandidates(fastPerplexity, identity);
+    const fastStructured = mergeStructuredCandidates(fastDirect, fastPerplexityCandidates);
     return {
       generatedAt: new Date().toISOString(),
       fx: {
@@ -465,9 +475,9 @@ async function collectMarketContext(identity: CardIdentity) {
         SNKRDUNK: { count: snkrdunk.length, directCount: snkrdunk.length },
         KREAM: { count: kream.length, directCount: kream.length }
       },
-      structuredCandidates: fastDirect,
+      structuredCandidates: fastStructured,
       directCandidates: fastDirect,
-      perplexity: { skipped: true, reason: "korean-market-priority fast exact mode" }
+      perplexity: fastPerplexity
     };
   }
 
